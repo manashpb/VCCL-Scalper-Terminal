@@ -15,7 +15,7 @@ or login is introduced. This is a single-owner terminal, like the workspace.
   marked and can never be sent to Dhan. ATM selection applies when the symbol,
   expiry or offset changes; manual strikes remain selected as prices move.
 - All prices and chains come from the existing FNO browser-token data service.
-  Snapshots poll once per second per group, using the original acquisition time
+  Snapshots poll one symbol/expiry group per second in rotation, keeping acquisition time
   and a five-second age guard. DhanHQ is used only for trading/profile and broker
   positions/P&L. No paid DhanHQ data endpoint or data WebSocket is used.
   The browser refreshes normalized data every 350ms; broker books every two seconds.

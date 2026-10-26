@@ -1,10 +1,19 @@
 // Read-only broker/data checks: creates a workspace login session, selects quotes,
 // then signs out. No DhanHQ login or order endpoint is called.
 import assert from 'node:assert/strict';
+import http from 'node:http';
 const origin=new URL(process.env.PORTAL_ORIGIN);
 assert.equal(origin.protocol,'http:','Adapt the verifier before migrating the workspace to HTTPS');
-const base='http://127.0.0.1';
-const request=(path,options={})=>fetch(base+path,{redirect:'manual',...options,headers:{Host:origin.host,...options.headers}});
+const request=(path,options={})=>new Promise((resolve,reject)=>{
+  const body=options.body instanceof URLSearchParams?options.body.toString():options.body;
+  const headers={Host:origin.host,...options.headers};if(body)headers['Content-Length']=Buffer.byteLength(body);
+  const req=http.request({hostname:'127.0.0.1',port:80,path,method:options.method||'GET',headers},res=>{
+    let text='';res.on('data',chunk=>text+=chunk);res.on('end',()=>{
+      const values=new Headers();for(const [k,v]of Object.entries(res.headers))if(v!==undefined)values.set(k,Array.isArray(v)?v.join('; '):v);
+      resolve({status:res.statusCode,headers:values,text:async()=>text,json:async()=>JSON.parse(text)});
+    });
+  });req.setTimeout(15000,()=>req.destroy(new Error('Verification request timeout')));req.on('error',reject);if(body)req.write(body);req.end();
+});
 const login=await request('/login'), html=await login.text();
 const anonymous=login.headers.get('set-cookie').split(';')[0];
 const csrf=/name="csrf" value="([^"]+)"/.exec(html)?.[1];assert.ok(csrf);
