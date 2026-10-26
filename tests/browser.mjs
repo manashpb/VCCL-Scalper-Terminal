@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
-const port=20903,origin=`http://127.0.0.1:${port}`;
+const port=20900+Math.floor(Math.random()*1000),origin=`http://127.0.0.1:${port}`;
 const processServer=spawn(process.execPath,['server/index.mjs'],{cwd:fileURLToPath(new URL('../',import.meta.url)),env:{...process.env,PORT:String(port),LOCAL_DEMO:'true',ALLOW_LIVE_TRADING:'false',SCALPER_ORIGIN:origin},stdio:'pipe'});
 let browser;
 try{
@@ -16,6 +16,11 @@ try{
   assert.ok(await page.getByRole('button',{name:'Select spot',exact:true}).isDisabled());
   assert.equal(await page.getByLabel('Buy limit pricing',{exact:true}).inputValue(),'LIMIT');
   assert.equal(await page.getByLabel('Sell limit pricing',{exact:true}).inputValue(),'LIMIT');
+  await page.getByRole('combobox',{name:'CE strike',exact:true}).click();
+  const strikes=page.getByRole('listbox',{name:'CE strikes around ATM'});await strikes.waitFor();
+  assert.ok(await strikes.locator('[role=option]').count()>10,'retain the full strike list');
+  assert.ok(await strikes.evaluate(el=>{const a=el.querySelector('.atm').getBoundingClientRect(),b=el.getBoundingClientRect();return Math.abs((a.top+a.bottom-b.top-b.bottom)/2)<20;}),'ATM should open at the menu center');
+  await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'Select PE',exact:true}).click();
   await page.getByRole('button',{name:'PE BUY LIMIT',exact:true}).waitFor();
   await page.getByRole('button',{name:'PE SELL MARKET S',exact:true}).waitFor();
@@ -28,6 +33,30 @@ try{
   await page.getByRole('status').filter({hasText:'Close order submitted'}).waitFor();
   await page.getByRole('button',{name:'Order book',exact:false}).click();
   await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});
+  await page.getByLabel('Buy limit price',{exact:true}).fill('1');
+  await page.getByRole('button',{name:'CE BUY LIMIT',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'BUY LIMIT submitted'}).waitFor();
+  const orderId=await page.locator('tbody tr').filter({has:page.getByRole('button',{name:'Edit',exact:true})}).first().getAttribute('data-order-id');
+  const pendingRow=page.locator(`tbody tr[data-order-id="${orderId}"]`);
+  await pendingRow.getByRole('button',{name:'Edit',exact:true}).click();
+  assert.equal(await page.getByRole('dialog',{name:'Edit order'}).count(),0);
+  await pendingRow.getByLabel('Edit price',{exact:true}).fill('2');
+  await pendingRow.getByRole('button',{name:'Discard order modifications'}).click();
+  assert.equal(await pendingRow.locator('input').count(),0);assert.match(await pendingRow.locator('td').nth(4).innerText(),/1\.00/);
+  await pendingRow.getByRole('button',{name:'Edit',exact:true}).click();
+  await pendingRow.getByLabel('Edit price',{exact:true}).fill('2');
+  await pendingRow.getByLabel('Edit quantity',{exact:true}).fill('130');
+  const modified=page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().includes('/api/orders/'));
+  await pendingRow.getByRole('button',{name:'Save order modifications'}).click();assert.equal((await modified).status(),200);
+  await page.getByRole('status').filter({hasText:'Modification requested'}).waitFor();
+  assert.match(await pendingRow.locator('td').nth(4).innerText(),/2\.00/);
+  await pendingRow.getByRole('button',{name:'Edit',exact:true}).click();
+  await pendingRow.getByLabel('Edit price',{exact:true}).fill('3');
+  await page.screenshot({path:fileURLToPath(new URL('../test-results/inline-edit.png',import.meta.url)),fullPage:true});
+  const cancelled=page.waitForResponse(r=>r.request().method()==='DELETE'&&r.url().includes('/api/orders/'));
+  await pendingRow.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal((await cancelled).status(),200);
+  await page.getByRole('status').filter({hasText:'Cancellation requested'}).waitFor();
+  assert.equal(await page.getByLabel('Edit price',{exact:true}).count(),0);
   await page.screenshot({path:fileURLToPath(new URL('../test-results/desktop.png',import.meta.url)),fullPage:true});
   await page.getByRole('button',{name:'Dhan connection',exact:false}).click();
   await page.getByRole('dialog',{name:'Dhan connection'}).waitFor();
@@ -37,5 +66,5 @@ try{
   await page.screenshot({path:fileURLToPath(new URL('../test-results/mobile.png',import.meta.url)),fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page should not overflow on mobile');
   assert.deepEqual(errors,[]);
-  console.log('Desktop/mobile rendering, paper market entry/close, positions, index guard, live lock and console checks passed');
+  console.log('Desktop/mobile rendering, ATM-centered full strike list, inline save/discard/order-cancel, paper entry/close, index guard, live lock and console checks passed');
 }finally{await browser?.close();processServer.kill();}

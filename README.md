@@ -10,6 +10,8 @@ or login is introduced. This is a single-owner terminal, like the workspace.
 
 - Compact responsive dark scalping layout, searchable F&O underlying selection,
   expiry, ATM ±3 strike selection, CE/PE prices, best bid/ask, and underlying LTP.
+  Strike dropdowns open centered on ATM while retaining the full strike list.
+  The selected contract has a prominent CE/PE-colored heading.
 - Dhan instrument master supplies security IDs, expiries, lot sizes, tick sizes
   and freeze quantities. Refreshes on connection; demo contracts are clearly
   marked and can never be sent to Dhan. ATM selection applies when the symbol,
@@ -33,6 +35,9 @@ or login is introduced. This is a single-owner terminal, like the workspace.
   contract close. Live books include the entire account. Bulk cancellation is
   limited to `SC`-prefixed terminal-created regular orders and excludes Super
   Order legs. Paper bulk cancellation includes all pending paper protection.
+  Pending edits happen directly in quantity/price/trigger table cells: ✓ submits,
+  × discards the draft, and Cancel separately cancels the order. Refreshes preserve
+  the draft; if the order stops being pending the editor closes automatically.
 - Quantity/freeze/notional validation, CSRF/origin checks, serialized mutations,
   request-ID deduplication, and an explicit persistent live-trading switch.
 
