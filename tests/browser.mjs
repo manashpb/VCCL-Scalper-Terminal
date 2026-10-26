@@ -1,0 +1,41 @@
+import { chromium } from '@playwright/test';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const port=20903,origin=`http://127.0.0.1:${port}`;
+const processServer=spawn(process.execPath,['server/index.mjs'],{cwd:fileURLToPath(new URL('../',import.meta.url)),env:{...process.env,PORT:String(port),LOCAL_DEMO:'true',ALLOW_LIVE_TRADING:'false',SCALPER_ORIGIN:origin},stdio:'pipe'});
+let browser;
+try{
+  for(let n=0;n<100;n++){try{await fetch(origin+'/scalper/api/state');break;}catch{await new Promise(r=>setTimeout(r,100));}}
+  browser=await chromium.launch({channel:'chrome',headless:true});
+  const page=await browser.newPage({viewport:{width:1440,height:1050}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(origin+'/scalper/');
+  await page.getByRole('button',{name:'CE BUY MARKET B',exact:true}).waitFor();
+  await page.waitForFunction(()=>!document.querySelector('.buy-controls button').disabled);
+  assert.ok(await page.getByRole('button',{name:'Select spot',exact:true}).isDisabled());
+  assert.equal(await page.getByLabel('Buy limit pricing',{exact:true}).inputValue(),'LIMIT');
+  assert.equal(await page.getByLabel('Sell limit pricing',{exact:true}).inputValue(),'LIMIT');
+  await page.getByRole('button',{name:'Select PE',exact:true}).click();
+  await page.getByRole('button',{name:'PE BUY LIMIT',exact:true}).waitFor();
+  await page.getByRole('button',{name:'PE SELL MARKET S',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Select CE',exact:true}).click();
+  await page.getByRole('button',{name:'CE BUY MARKET B',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'BUY MARKET submitted'}).waitFor();
+  await page.getByRole('button',{name:'Positions',exact:false}).click();
+  assert.ok(await page.locator('tbody tr').count()>=1);
+  await page.getByRole('button',{name:'Close selected position',exact:false}).click();
+  await page.getByRole('status').filter({hasText:'Close order submitted'}).waitFor();
+  await page.getByRole('button',{name:'Order book',exact:false}).click();
+  await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});
+  await page.screenshot({path:fileURLToPath(new URL('../test-results/desktop.png',import.meta.url)),fullPage:true});
+  await page.getByRole('button',{name:'Dhan connection',exact:false}).click();
+  await page.getByRole('dialog',{name:'Dhan connection'}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'Arm real trading'}).isDisabled());
+  await page.getByRole('button',{name:'Close connection settings'}).click();
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:fileURLToPath(new URL('../test-results/mobile.png',import.meta.url)),fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page should not overflow on mobile');
+  assert.deepEqual(errors,[]);
+  console.log('Desktop/mobile rendering, paper market entry/close, positions, index guard, live lock and console checks passed');
+}finally{await browser?.close();processServer.kill();}
