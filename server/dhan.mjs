@@ -1,11 +1,11 @@
-import WebSocket from 'ws';
-import { decodeFeed, keyOf, totp } from './domain.mjs';
+import { totp } from './domain.mjs';
 export class Dhan {
   constructor(env = process.env) {
     this.env = env; this.token = env.DHAN_ACCESS_TOKEN || ''; this.clientId = env.DHAN_CLIENT_ID || '';
-    this.connected = false; this.feedStatus = 'Disconnected'; this.quotes = new Map(); this.subscriptions = []; this.generation = 0;
+    this.connected = false;
   }
   async request(path, method = 'GET', body) {
+    if(!/^\/(profile|orders|positions|super\/orders)(\/|$)/.test(path))throw new Error('Trading adapter does not allow market-data endpoints');
     if (!this.token || !this.clientId) throw new Error('Configure Dhan credentials in the server .env');
     let r;
     try { r = await fetch(`https://api.dhan.co/v2${path}`, {method,headers:{'Content-Type':'application/json','access-token':this.token,'client-id':this.clientId},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(12000)}); }
@@ -22,30 +22,9 @@ export class Dhan {
       if (!r.ok || !data?.accessToken) throw new Error('Dhan TOTP authentication failed. Check client ID, PIN, TOTP and server clock.');
       this.token = data.accessToken; this.expiresAt = data.expiryTime;
     }
-    await this.request('/profile'); this.connected = true; this.quotes.clear(); this.openFeed();
+    await this.request('/profile'); this.connected = true;
   }
-  disconnect() { this.connected = false; this.generation++; clearTimeout(this.retry); this.ws?.close(); this.feedStatus='Disconnected'; this.quotes.clear(); }
-  subscribe(instruments) {
-    const next = [...new Map(instruments.map(i=>[keyOf(i),i])).values()].slice(0,100);
-    if (JSON.stringify(next.map(keyOf)) === JSON.stringify(this.subscriptions.map(keyOf))) return;
-    if (this.ws?.readyState===WebSocket.OPEN && this.subscriptions.length) this.sendSubscription(this.subscriptions,22);
-    this.subscriptions=next;
-    if(this.ws?.readyState===WebSocket.OPEN) this.sendSubscription(next,21);
-  }
-  sendSubscription(items, code) {
-    if(items.length) this.ws.send(JSON.stringify({RequestCode:code,InstrumentCount:items.length,InstrumentList:items.map(i=>({ExchangeSegment:i.exchangeSegment,SecurityId:i.securityId}))}));
-  }
-  openFeed() {
-    if (!this.connected) return;
-    const generation = ++this.generation;
-    this.ws?.close(); this.feedStatus='Connecting';
-    const params = new URLSearchParams({version:'2',token:this.token,clientId:this.clientId,authType:'2'});
-    const socket = this.ws = new WebSocket(`wss://api-feed.dhan.co?${params}`);
-    socket.on('open',()=> {if(generation!==this.generation)return;this.feedStatus='Streaming';this.sendSubscription(this.subscriptions,21);});
-    socket.on('message',buffer=>{if(generation!==this.generation)return;try{for(const q of decodeFeed(buffer)){const key=keyOf(q);this.quotes.set(key,{...this.quotes.get(key),...q});}}catch(e){this.feedStatus=e.message;socket.close();}});
-    socket.on('error',()=>{if(generation===this.generation)this.feedStatus='Feed unavailable';});
-    socket.on('close',()=>{if(generation!==this.generation || !this.connected)return;this.feedStatus='Reconnecting';this.retry=setTimeout(()=>this.openFeed(),5000);});
-  }
+  disconnect() { this.connected = false; }
   payload(i,o,id) {
     return {dhanClientId:this.clientId,correlationId:id,transactionType:o.side,exchangeSegment:i.exchangeSegment,productType:'INTRADAY',orderType:o.type,validity:'DAY',securityId:i.securityId,quantity:o.quantity,disclosedQuantity:0,price:o.price,triggerPrice:o.triggerPrice,afterMarketOrder:false};
   }

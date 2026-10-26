@@ -44,6 +44,7 @@ Keep these server settings as configured during installation:
 PORT=5003
 SCALPER_ORIGIN=YOUR_EXACT_WORKSPACE_ORIGIN
 PORTAL_VERIFY_URL=http://127.0.0.1:5001/verify
+FNO_MARKETDATA_URL=http://127.0.0.1:8001
 LOCAL_DEMO=false
 DHAN_STATIC_IP=YOUR_BACKEND_OUTBOUND_PUBLIC_IP
 ALLOW_LIVE_TRADING=false
@@ -53,8 +54,10 @@ MAX_ORDER_NOTIONAL=500000
 
 Register that outbound public IP in DhanHQ's static-IP whitelist. Merely entering
 it in `.env` does not register it. This is the backend server's IP, not your laptop
-IP. Dhan Data API entitlement is required for streaming data; trading/segment
-access must be active for the contracts you intend to trade.
+IP. Trading/segment access must be active for the contracts you intend to trade.
+Market data comes from the existing FNO browser-token service; no paid DhanHQ
+data plan is required. Refresh the Dhan browser token using VCCL Token Sync.
+No browser JWT needs to be entered in this file.
 
 Restart only this process after editing the file:
 
@@ -63,7 +66,9 @@ export PATH="$HOME/.nvm/versions/node/v22.23.4/bin:$PATH"
 pm2 restart scalper-terminal --update-env
 ```
 
-Open the workspace → Scalper Terminal → Dhan connection → Connect Dhan. Keep
+Open the workspace → Scalper Terminal. Browser data starts independently. For
+execution/account books use Dhan connection → Connect trading API. Reconnect
+browser data after fixing service/token errors. Trading disconnect leaves data active. Keep
 `ALLOW_LIVE_TRADING=false` while checking authentication, contracts, market feed
 and paper orders. When ready for real execution, deliberately change that setting
 to `true`, restart this service, and type `ENABLE LIVE` in the terminal's arming
@@ -86,3 +91,13 @@ pm2 save
 
 Review unexpected local changes before pulling. A restart clears the paper book,
 live arming state and in-memory access token; broker orders continue at Dhan.
+
+## Snapshot limits
+
+Browser data is polled, not tick-by-tick streaming. A one-second FNO cache keeps
+its original acquisition timestamp; this is fetch age, not guaranteed exchange
+tick age. Up to four symbol/expiry groups are polled in rotation. Missing quotes,
+stale responses and wrong expiry never fall back to the paid API or simulated
+prices in production. Underlying bid/ask is unavailable in the chain and stays
+blank; midpoint pricing requires real bid and ask. Public Dhan instrument CSV
+metadata still supplies execution IDs, lots, ticks and freeze limits.

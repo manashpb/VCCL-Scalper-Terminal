@@ -3,12 +3,14 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Instruments } from './instruments.mjs';
 import { Dhan } from './dhan.mjs';
+import { BrowserMarketData } from './market-data.mjs';
 import { keyOf, PaperBook, pending, validateOrder, roundTick } from './domain.mjs';
 
 const env=process.env, port=Number(env.PORT || 5003), origin=env.SCALPER_ORIGIN || `http://127.0.0.1:${port}`;
 const localDemo=env.LOCAL_DEMO==='true';
 if (localDemo && env.ALLOW_LIVE_TRADING==='true') throw new Error('LOCAL_DEMO cannot enable live trading');
 const app=express(), instruments=new Instruments(), dhan=new Dhan(), paper=new PaperBook(), demoQuotes=new Map(), csrf=randomBytes(32).toString('hex');
+const market=new BrowserMarketData(instruments,env);
 let mode='PAPER', armedUntil=0, brokerError='', book={orders:[],positions:[],superOrders:[]}, bookAt=0, bookError='', busy=false, selection=[], refreshing=false;
 const requests=new Map(), closeLocks=new Map();
 app.disable('x-powered-by');
@@ -32,8 +34,8 @@ app.use('/scalper/api',(req,res,next)=>{
   next();
 });
 const route=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
-const quotes=()=>dhan.connected?dhan.quotes:demoQuotes;
-function status() { return {mode,csrf,connected:dhan.connected,feed:dhan.feedStatus,brokerError,bookError,bookAt,armed:armedUntil>Date.now(),armedUntil,liveAllowed:env.ALLOW_LIVE_TRADING==='true'&&!localDemo,credentialsConfigured:!!env.DHAN_CLIENT_ID&&!!(env.DHAN_ACCESS_TOKEN || env.DHAN_PIN&&env.DHAN_TOTP_SECRET),staticIpConfigured:!!env.DHAN_STATIC_IP,demo:!dhan.connected,instrumentDemo:instruments.demo,instrumentsAt:instruments.loadedAt,localDemo,maxQuantity:Number(env.MAX_ORDER_QUANTITY||5000),maxNotional:Number(env.MAX_ORDER_NOTIONAL||500000)}; }
+const quotes=()=>market.enabled?market.quotes:demoQuotes;
+function status() { return {mode,csrf,connected:dhan.connected,feed:market.status,marketReady:market.ready,marketVersion:market.version,marketEnabled:market.enabled,marketError:market.error,brokerError,bookError,bookAt,armed:armedUntil>Date.now(),armedUntil,liveAllowed:env.ALLOW_LIVE_TRADING==='true'&&!localDemo,credentialsConfigured:!!env.DHAN_CLIENT_ID&&!!(env.DHAN_ACCESS_TOKEN || env.DHAN_PIN&&env.DHAN_TOTP_SECRET),staticIpConfigured:!!env.DHAN_STATIC_IP,demo:!market.enabled,instrumentDemo:instruments.demo,instrumentsAt:instruments.loadedAt,localDemo,maxQuantity:Number(env.MAX_ORDER_QUANTITY||5000),maxNotional:Number(env.MAX_ORDER_NOTIONAL||500000)}; }
 function snapshot() { return {...status(),...(mode==='PAPER'?paper.snapshot(quotes()):book),quotes:Object.fromEntries(quotes())}; }
 function assertLive() {
   if(mode!=='LIVE' || armedUntil<Date.now() || env.ALLOW_LIVE_TRADING!=='true' || localDemo || !env.DHAN_STATIC_IP || !dhan.connected || instruments.demo)throw new Error('Live trading is locked. Connect Dhan, configure static IP and enable live trading.');
@@ -57,25 +59,26 @@ const mutation=fn=>route(async(req,res)=>{
   busy=true;try{await fn(req,res);}finally{busy=false;}
 });
 app.get('/scalper/api/state',(req,res)=>res.json(snapshot()));
-app.get('/scalper/api/symbols',(req,res)=>res.json({symbols:instruments.symbols()}));
-app.get('/scalper/api/contracts',(req,res)=>res.json(instruments.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||''))));
+app.get('/scalper/api/symbols',(req,res)=>res.json({symbols:market.enabled?market.symbols():instruments.symbols()}));
+app.get('/scalper/api/contracts',route(async(req,res)=>res.json(market.enabled?await market.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')):instruments.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')))));
 app.post('/scalper/api/subscribe',route(async(req,res)=>{
   if(!Array.isArray(req.body.keys)||req.body.keys.length>100)throw new Error('Select at most 100 instruments');
   selection=req.body.keys.map(k=>instruments.byKey.get(k));if(selection.some(i=>!i))throw new Error('Unknown instrument');
-  if(dhan.connected)dhan.subscribe(selection);
+  if(market.enabled)await market.subscribe(selection);
   res.json({ok:true});
 }));
 let lastConnect=0;
 app.post('/scalper/api/connect',mutation(async(req,res)=>{
   if(Date.now()-lastConnect<10000)throw new Error('Wait 10 seconds between connection attempts');lastConnect=Date.now();
   armedUntil=0;mode='PAPER';brokerError='';
-  try { await instruments.load(true); await dhan.connect(); selection=[];await syncBook();res.json(status()); }
-  catch(e){brokerError=e.message;dhan.disconnect();instruments.setDemo();throw e;}
+  try { await dhan.connect(); await syncBook();res.json(status()); }
+  catch(e){brokerError=e.message;dhan.disconnect();throw e;}
 }));
 app.post('/scalper/api/disconnect',mutation(async(req,res)=>{
   if(mode==='LIVE')throw new Error('Switch to paper mode before disconnecting. Broker orders continue independently.');
-  dhan.disconnect();instruments.setDemo();selection=[];armedUntil=0;res.json(status());
+  dhan.disconnect();armedUntil=0;res.json(status());
 }));
+app.post('/scalper/api/market/reconnect',mutation(async(req,res)=>{if(!market.enabled)throw new Error('Browser data is disabled in local demo');await market.start(true);if(selection.length)await market.subscribe(selection);res.json(status());}));
 app.post('/scalper/api/mode',mutation(async(req,res)=>{
   if(!['PAPER','LIVE'].includes(req.body.mode))throw new Error('Invalid mode');
   if(req.body.mode==='LIVE') {
@@ -148,7 +151,7 @@ app.get('/',(req,res)=>res.redirect('/scalper/'));
 app.use((err,req,res,next)=>{res.status(400).json({error:String(err.message||'Request failed').slice(0,500)});});
 setInterval(()=>{
   const now=Date.now();
-  if(!dhan.connected){
+  if(!market.enabled){
     for(const i of instruments.items) {
       if(!instruments.demo)continue;
       const base=i.demoSpot, wave=Math.sin(now/15000)*base*0.0005;
@@ -161,4 +164,5 @@ setInterval(()=>{
 },250).unref();
 setInterval(()=>{if(dhan.connected)syncBook();},2000).unref();
 export const server=app.listen(port,'127.0.0.1',()=>console.log(`Scalper Terminal listening on http://127.0.0.1:${port}/scalper/ (${localDemo?'local paper demo':'workspace authentication required'})`));
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{dhan.disconnect();server.close(()=>process.exit());});
+if(market.enabled && env.NODE_ENV!=='test')market.start().catch(()=>{});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{dhan.disconnect();market.stop();server.close(()=>process.exit());});

@@ -16,3 +16,13 @@ test('Dhan network mutation failure reports an unknown outcome without retrying'
   const original=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error('network');};
   try{const d=new Dhan({DHAN_CLIENT_ID:'test',DHAN_ACCESS_TOKEN:'test'});await assert.rejects(d.request('/orders','POST',{}),/outcome is unknown/);assert.equal(calls,1);}finally{globalThis.fetch=original;}
 });
+test('trading connection never starts data and rejects every paid data path',async()=>{
+  const d=new Dhan({DHAN_CLIENT_ID:'test',DHAN_ACCESS_TOKEN:'test'}),paths=[];
+  const original=globalThis.fetch;
+  globalThis.fetch=async url=>{paths.push(String(url));return new Response('{}',{status:200,headers:{'Content-Type':'application/json'}});};
+  try{
+    await d.connect();assert.equal(d.connected,true);assert.deepEqual(paths,['https://api.dhan.co/v2/profile']);
+    for(const path of ['/marketfeed/quote','/optionchain','/charts/intraday'])await assert.rejects(d.request(path),/does not allow market-data/);
+    assert.equal(paths.length,1);d.disconnect();
+  }finally{globalThis.fetch=original;}
+});

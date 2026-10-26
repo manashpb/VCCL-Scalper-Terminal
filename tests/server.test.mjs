@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 async function running(extra,fn){
   const port=19000+Math.floor(Math.random()*1000),origin=`http://127.0.0.1:${port}`;
-  const p=spawn(process.execPath,[fileURLToPath(new URL('../server/index.mjs',import.meta.url))],{env:{...process.env,DHAN_CLIENT_ID:'',DHAN_ACCESS_TOKEN:'',DHAN_PIN:'',DHAN_TOTP_SECRET:'',ALLOW_LIVE_TRADING:'false',PORT:String(port),SCALPER_ORIGIN:origin,...extra},stdio:'pipe'});
+  const p=spawn(process.execPath,[fileURLToPath(new URL('../server/index.mjs',import.meta.url))],{env:{...process.env,NODE_ENV:'test',FNO_MARKETDATA_URL:'',DHAN_CLIENT_ID:'',DHAN_ACCESS_TOKEN:'',DHAN_PIN:'',DHAN_TOTP_SECRET:'',ALLOW_LIVE_TRADING:'false',PORT:String(port),SCALPER_ORIGIN:origin,...extra},stdio:'pipe'});
   let log='';p.stdout.on('data',d=>log+=d);p.stderr.on('data',d=>log+=d);
   try {let r;const deadline=Date.now()+30000;while(Date.now()<deadline){if(p.exitCode!==null)break;try{r=await fetch(origin+'/scalper/api/state',{signal:AbortSignal.timeout(5000)});break;}catch{await new Promise(r=>setTimeout(r,100));}}assert.ok(r,`Server failed to start: ${log}`);await fn(origin,r);}finally{p.kill();await new Promise(r=>{if(p.exitCode!==null||p.signalCode!==null)r();else p.once('exit',r);});}
 }

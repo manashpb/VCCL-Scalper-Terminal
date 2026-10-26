@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {totp,validateOrder,PaperBook,keyOf,decodeFeed,pending} from '../server/domain.mjs';
+import {totp,validateOrder,PaperBook,keyOf,pending} from '../server/domain.mjs';
 import {parseInstruments} from '../server/instruments.mjs';
 const instrument={securityId:'42',exchangeSegment:'NSE_FNO',lotSize:25,tickSize:.05,tradingSymbol:'TEST CE',freezeQty:500};
 const q=(ltp,bid=ltp,ask=ltp)=>({ltp,bid,ask,receivedAt:Date.now()});
@@ -32,12 +32,6 @@ test('paper protection creates exits only after fill and cancels its OCO sibling
   const b=new PaperBook(),o=b.place(instrument,validateOrder({...input,type:'LIMIT',price:95,protection:'BOTH',sl:10,target:20},instrument,q(100)),q(100));
   assert.equal(b.orders.length,1);b.tick(instrument,q(95));assert.equal(o.orderStatus,'TRADED');assert.equal(b.orders.length,3);
   b.tick(instrument,q(115));assert.equal(b.snapshot(new Map()).positions[0].netQty,0);assert.equal(b.orders.filter(pending).length,0);assert.equal(b.orders.filter(o=>o.orderStatus==='CANCELLED').length,1);
-});
-test('binary decoder handles concatenated full/ticker packets and malformed tails',()=>{
-  const p=Buffer.alloc(162);p[0]=8;p.writeUInt16LE(162,1);p[3]=2;p.writeInt32LE(42,4);p.writeFloatLE(100,8);p.writeFloatLE(99.5,74);p.writeFloatLE(100.5,78);
-  const t=Buffer.alloc(16);t[0]=2;t.writeUInt16LE(16,1);t[3]=0;t.writeInt32LE(13,4);t.writeFloatLE(24000,8);
-  const parsed=decodeFeed(Buffer.concat([p,t,Buffer.alloc(3)]));assert.equal(parsed.length,2);assert.equal(parsed[0].bid,99.5);assert.equal(parsed[0].ask,100.5);assert.equal(parsed[1].exchangeSegment,'IDX_I');
-  assert.deepEqual(decodeFeed(Buffer.alloc(8)),[]);
 });
 test('instrument parser uses broker lot/tick metadata and excludes expired options',()=>{
   const csv='EXCH_ID,SEGMENT,SECURITY_ID,INSTRUMENT,UNDERLYING_SYMBOL,SYMBOL_NAME,DISPLAY_NAME,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,TICK_SIZE,SM_FREEZE_QTY\nNSE,D,42,OPTIDX,NIFTY,NIFTY,Test,65,2099-10-01,24500,CE,5,1800\nNSE,D,43,OPTIDX,NIFTY,NIFTY,Expired,25,2000-01-01,24000,PE,5,1800\n';

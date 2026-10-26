@@ -43,22 +43,6 @@ export function validateOrder(input, instrument, quote, limits = {}) {
   if (sl && stopLossPrice <= 0 || target && targetPrice <= 0) throw new Error('Protection price must be positive');
   return { side: input.side, type: input.type, quantity, price, triggerPrice, protection, sl, target, stopLossPrice, targetPrice };
 }
-export function decodeFeed(buffer, now = Date.now()) {
-  const result = [], segments = {0:'IDX_I',1:'NSE_EQ',2:'NSE_FNO',4:'BSE_EQ',8:'BSE_FNO'};
-  for (let offset = 0; offset + 8 <= buffer.length;) {
-    const length = buffer.readUInt16LE(offset + 1);
-    if (length < 8 || offset + length > buffer.length) break;
-    const p = buffer.subarray(offset, offset + length), code = p[0];
-    if (code === 50 && length >= 10) throw new Error(`Dhan feed disconnected (${p.readUInt16LE(8)})`);
-    if ([1,2,4,8].includes(code) && length >= 12 && segments[p[3]]) {
-      const q = { exchangeSegment: segments[p[3]], securityId: String(p.readInt32LE(4)), ltp: p.readFloatLE(8), receivedAt: now };
-      if (code === 8 && length >= 162) { q.bid = p.readFloatLE(74); q.ask = p.readFloatLE(78); }
-      if (Number.isFinite(q.ltp) && q.ltp > 0) result.push(q);
-    }
-    offset += length;
-  }
-  return result;
-}
 export class PaperBook {
   constructor() { this.orders = []; this.positions = new Map(); }
   place(instrument, order, quote) {

@@ -4,6 +4,11 @@
 - Public base path /scalper/; backend loopback port 5003. Preserve shared portal
   cookie verification, origin/CSRF checks and the Nginx prefix contract.
 - Keep Dhan credentials server-side in private .env, never VITE_* or logs.
+- All market data comes from the FNO Analyzer's loopback browser-token bridge,
+  using its existing Token Sync lifecycle. DhanHQ is trading/profile only; do not
+  introduce paid market-feed, option-chain or chart endpoints there. Preserve
+  snapshot acquisition age, exact expiry and missing quotes; no simulation fallback
+  when production browser data fails. Live P&L and positions stay broker-sourced.
 - Paper mode is default. LOCAL_DEMO bypasses auth for local preview only and
   cannot enable live execution. No live orders in tests or without user intent.
 - Do not deploy cloud services or change IP whitelists as part of local edits.

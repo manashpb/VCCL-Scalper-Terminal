@@ -14,9 +14,12 @@ or login is introduced. This is a single-owner terminal, like the workspace.
   and freeze quantities. Refreshes on connection; demo contracts are clearly
   marked and can never be sent to Dhan. ATM selection applies when the symbol,
   expiry or offset changes; manual strikes remain selected as prices move.
-- Server-side binary WebSocket feed with reconnect and a five-second quote guard.
-  Browser receives normalized quotes every 350ms; broker books refresh every two
-  seconds. Prices are simulated until connected.
+- All prices and chains come from the existing FNO browser-token data service.
+  Snapshots poll once per second per group, using the original acquisition time
+  and a five-second age guard. DhanHQ is used only for trading/profile and broker
+  positions/P&L. No paid DhanHQ data endpoint or data WebSocket is used.
+  The browser refreshes normalized data every 350ms; broker books every two seconds.
+  Only explicit local demo mode simulates prices; production failures stay unavailable.
 - Market, limit (LTP, bid/ask midpoint, manual) and SL-limit entries; quantity
   steps by contract lot; B/S market shortcuts (opt-in; suppressed in inputs).
   Spot execution is disabled for indexes. Execution uses INTRADAY / DAY.
@@ -43,6 +46,7 @@ Requires Node.js 22.16+ and npm. From this folder in PowerShell:
 npm ci
 npm run build
 $env:LOCAL_DEMO='true'
+$env:FNO_MARKETDATA_URL=''
 $env:ALLOW_LIVE_TRADING='false'
 npm start
 ```
@@ -62,6 +66,7 @@ code, browser settings, Git, chat messages and `VITE_*` variables.
 | --- | --- |
 | `SCALPER_ORIGIN` | Exact public workspace origin, e.g. `https://your-host`, no trailing slash |
 | `PORTAL_VERIFY_URL` | Default `http://127.0.0.1:5001/verify` |
+| `FNO_MARKETDATA_URL` | Existing browser-token service, default `http://127.0.0.1:8001` |
 | `DHAN_CLIENT_ID` | Dhan client ID |
 | `DHAN_ACCESS_TOKEN` | Manual DhanHQ access token (takes precedence when set) |
 | `DHAN_PIN`, `DHAN_TOTP_SECRET` | Alternative: six-digit PIN and base32 authenticator seed |
@@ -74,13 +79,15 @@ The static IP field is metadata, not a network assignment or proof of whitelisti
 Set and verify the whitelist in DhanHQ; Dhan enforces it. Requests originate from
 the backend host. A dynamic home IP cannot be made static by this setting.
 
-Click **Dhan connection → Connect Dhan** after configuration and process restart.
+Market data starts independently through FNO Analyzer. Use **Dhan connection →
+Connect trading API** for execution, broker positions and P&L.
 With TOTP, the backend generates a token only when no access token is present;
 the generated token stays in memory. Keep the server clock synchronized. An
 expired manually configured token must be replaced. Clear `DHAN_ACCESS_TOKEN`
 to use TOTP login. No background token generation occurs. Market data requires
-Dhan Data API entitlement. Profile verification alone does not verify market
-data entitlement or exchange order acceptance.
+the existing Dhan browser session in FNO Analyzer, refreshed with VCCL Token Sync.
+It does not require the paid DhanHQ Data API. Profile verification only checks
+trading authentication, not exchange order acceptance.
 
 ## Workspace deployment
 
@@ -100,7 +107,7 @@ data entitlement or exchange order acceptance.
 5. Check authenticated page, assets, state API, paper entry and close. Anonymous
    requests to all scalper routes must require login. `/verify` stays blocked
    publicly; do not expose port 5003.
-6. Connect Dhan and verify contract metadata, quotes, account books, entitlement
+6. Connect Dhan and verify contract metadata, quotes, account books, browser token
    and IP whitelist. Enable live deliberately; type `ENABLE LIVE` to arm for 15
    minutes. Development/tests have placed no live orders.
 
@@ -127,7 +134,7 @@ simultaneous external trading in that contract. Batch cancellation can partially
 succeed; review individual broker status after errors.
 
 Authenticated integration and real execution remain **unverified until credentials,
-market entitlement, static IP and exchange access are supplied and tested**.
+browser session, static IP and exchange access are supplied and tested**.
 
 ## Verification
 
@@ -147,5 +154,5 @@ in `../workspace`. Dependencies are pinned in `package-lock.json`.
 - [Authentication, TOTP, IP whitelist](https://dhanhq.co/docs/v2/authentication/)
 - [Orders](https://dhanhq.co/docs/v2/orders/)
 - [Super Orders](https://dhanhq.co/docs/v2/super-order/)
-- [Live feed](https://dhanhq.co/docs/v2/live-market-feed/)
+- Market data: FNO Analyzer `/api/scalper/chain` browser-session bridge
 - [Instrument master](https://dhanhq.co/docs/v2/instruments/)
