@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Instruments } from './instruments.mjs';
 import { Dhan } from './dhan.mjs';
 import { BrowserMarketData } from './market-data.mjs';
+import { TradingModeStore } from './trading-mode.mjs';
 import { keyOf, PaperBook, pending, validateOrder, roundTick } from './domain.mjs';
 
 const env=process.env, port=Number(env.PORT || 5003), origin=env.SCALPER_ORIGIN || `http://127.0.0.1:${port}`;
@@ -11,7 +12,8 @@ const localDemo=env.LOCAL_DEMO==='true';
 if (localDemo && env.ALLOW_LIVE_TRADING==='true') throw new Error('LOCAL_DEMO cannot enable live trading');
 const app=express(), instruments=new Instruments(), dhan=new Dhan(), paper=new PaperBook(), demoQuotes=new Map(), csrf=randomBytes(32).toString('hex');
 const market=new BrowserMarketData(instruments,env);
-let mode='PAPER', armedUntil=0, brokerError='', book={orders:[],positions:[],superOrders:[]}, bookAt=0, bookError='', busy=false, selection=[], refreshing=false;
+const modeStore=new TradingModeStore(env.TRADING_STATE_FILE || fileURLToPath(new URL('../data/trading-mode.json',import.meta.url)),!localDemo);
+let mode=await modeStore.load(), brokerError='', book={orders:[],positions:[],superOrders:[]}, bookAt=0, bookError='', busy=false, selection=[], refreshing=false;
 const requests=new Map(), closeLocks=new Map();
 app.disable('x-powered-by');
 app.use((req,res,next)=>{
@@ -35,10 +37,10 @@ app.use('/scalper/api',(req,res,next)=>{
 });
 const route=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
 const quotes=()=>market.enabled?market.quotes:demoQuotes;
-function status() { return {mode,csrf,connected:dhan.connected,feed:market.status,marketReady:market.ready,marketVersion:market.version,marketEnabled:market.enabled,marketError:market.error,brokerError,bookError,bookAt,armed:armedUntil>Date.now(),armedUntil,liveAllowed:env.ALLOW_LIVE_TRADING==='true'&&!localDemo,credentialsConfigured:!!env.DHAN_CLIENT_ID&&!!(env.DHAN_ACCESS_TOKEN || env.DHAN_PIN&&env.DHAN_TOTP_SECRET),staticIpConfigured:!!env.DHAN_STATIC_IP,demo:!market.enabled,instrumentDemo:instruments.demo,instrumentsAt:instruments.loadedAt,localDemo,maxQuantity:Number(env.MAX_ORDER_QUANTITY||5000),maxNotional:Number(env.MAX_ORDER_NOTIONAL||500000)}; }
+function status() { return {mode,csrf,connected:dhan.connected,feed:market.status,marketReady:market.ready,marketVersion:market.version,marketEnabled:market.enabled,marketError:market.error,brokerError,bookError,bookAt,armed:mode==='LIVE',liveReady:mode==='LIVE'&&env.ALLOW_LIVE_TRADING==='true'&&!localDemo&&!!env.DHAN_STATIC_IP&&dhan.connected&&market.ready&&!instruments.demo,liveAllowed:env.ALLOW_LIVE_TRADING==='true'&&!localDemo,credentialsConfigured:!!env.DHAN_CLIENT_ID&&!!(env.DHAN_ACCESS_TOKEN || env.DHAN_PIN&&env.DHAN_TOTP_SECRET),staticIpConfigured:!!env.DHAN_STATIC_IP,demo:!market.enabled,instrumentDemo:instruments.demo,instrumentsAt:instruments.loadedAt,localDemo,maxQuantity:Number(env.MAX_ORDER_QUANTITY||5000),maxNotional:Number(env.MAX_ORDER_NOTIONAL||500000)}; }
 function snapshot() { return {...status(),...(mode==='PAPER'?paper.snapshot(quotes()):book),quotes:Object.fromEntries(quotes())}; }
 function assertLive() {
-  if(mode!=='LIVE' || armedUntil<Date.now() || env.ALLOW_LIVE_TRADING!=='true' || localDemo || !env.DHAN_STATIC_IP || !dhan.connected || instruments.demo)throw new Error('Live trading is locked. Connect Dhan, configure static IP and enable live trading.');
+  if(mode!=='LIVE' || env.ALLOW_LIVE_TRADING!=='true' || localDemo || !env.DHAN_STATIC_IP || !dhan.connected || instruments.demo)throw new Error('Live execution is unavailable. Connect Dhan, configure static IP and enable live trading.');
 }
 async function syncBook() {
   if(!dhan.connected || refreshing)return;
@@ -70,23 +72,23 @@ app.post('/scalper/api/subscribe',route(async(req,res)=>{
 let lastConnect=0;
 app.post('/scalper/api/connect',mutation(async(req,res)=>{
   if(Date.now()-lastConnect<10000)throw new Error('Wait 10 seconds between connection attempts');lastConnect=Date.now();
-  armedUntil=0;mode='PAPER';brokerError='';
+  brokerError='';
   try { await dhan.connect(); await syncBook();res.json(status()); }
   catch(e){brokerError=e.message;dhan.disconnect();throw e;}
 }));
 app.post('/scalper/api/disconnect',mutation(async(req,res)=>{
   if(mode==='LIVE')throw new Error('Switch to paper mode before disconnecting. Broker orders continue independently.');
-  dhan.disconnect();armedUntil=0;res.json(status());
+  dhan.disconnect();res.json(status());
 }));
 app.post('/scalper/api/market/reconnect',mutation(async(req,res)=>{if(!market.enabled)throw new Error('Browser data is disabled in local demo');await market.start(true);if(selection.length)await market.subscribe(selection);res.json(status());}));
 app.post('/scalper/api/mode',mutation(async(req,res)=>{
   if(!['PAPER','LIVE'].includes(req.body.mode))throw new Error('Invalid mode');
   if(req.body.mode==='LIVE') {
-    if(req.body.ack!=='ENABLE LIVE')throw new Error('Type ENABLE LIVE to arm real trading');
+    if(req.body.ack!=='ENABLE LIVE')throw new Error('Type ENABLE LIVE to enable real trading');
     if(env.ALLOW_LIVE_TRADING!=='true'||localDemo||!env.DHAN_STATIC_IP||!dhan.connected||instruments.demo)throw new Error('Live trading prerequisites are incomplete');
     await syncBook();if(bookError)throw new Error('Cannot reconcile broker books');
-    armedUntil=Date.now()+15*60000;
-  }else armedUntil=0;
+  }
+  await modeStore.save(req.body.mode);
   mode=req.body.mode;res.json(snapshot());
 }));
 app.post('/scalper/api/orders',mutation(async(req,res)=>{

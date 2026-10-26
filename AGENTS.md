@@ -9,7 +9,10 @@
   introduce paid market-feed, option-chain or chart endpoints there. Preserve
   snapshot acquisition age, exact expiry and missing quotes; no simulation fallback
   when production browser data fails. Live P&L and positions stay broker-sourced.
-- Paper mode is default. LOCAL_DEMO bypasses auth for local preview only and
+- Paper mode is the initial default. An explicit live/paper choice persists in
+  ignored data/trading-mode.json until the user changes it; never expire it or
+  reset it during reconnect. Execution still requires a valid trading connection,
+  configuration and fresh quotes. LOCAL_DEMO bypasses auth for local preview only and
   cannot enable live execution. No live orders in tests or without user intent.
 - Do not deploy cloud services or change IP whitelists as part of local edits.
 - Keep broker-managed protection separate from paper OCO. Do not introduce

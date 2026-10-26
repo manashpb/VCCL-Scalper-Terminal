@@ -31,7 +31,7 @@ try{
   await page.screenshot({path:fileURLToPath(new URL('../test-results/desktop.png',import.meta.url)),fullPage:true});
   await page.getByRole('button',{name:'Dhan connection',exact:false}).click();
   await page.getByRole('dialog',{name:'Dhan connection'}).waitFor();
-  assert.ok(await page.getByRole('button',{name:'Arm real trading'}).isDisabled());
+  assert.ok(await page.getByRole('button',{name:'Enable real trading'}).isDisabled());
   await page.getByRole('button',{name:'Close connection settings'}).click();
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:fileURLToPath(new URL('../test-results/mobile.png',import.meta.url)),fullPage:true});

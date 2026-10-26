@@ -89,8 +89,9 @@ pm2 restart scalper-terminal --update-env
 pm2 save
 ```
 
-Review unexpected local changes before pulling. A restart clears the paper book,
-live arming state and in-memory access token; broker orders continue at Dhan.
+Review unexpected local changes before pulling. A restart clears the paper book and in-memory access token; broker orders
+continue at Dhan. Live/paper selection persists in ignored `data/trading-mode.json`
+until you explicitly change it. Reconnect the trading API after a restart.
 
 ## Snapshot limits
 

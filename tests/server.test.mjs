@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 async function running(extra,fn){
   const port=19000+Math.floor(Math.random()*1000),origin=`http://127.0.0.1:${port}`;
   const p=spawn(process.execPath,[fileURLToPath(new URL('../server/index.mjs',import.meta.url))],{env:{...process.env,NODE_ENV:'test',FNO_MARKETDATA_URL:'',DHAN_CLIENT_ID:'',DHAN_ACCESS_TOKEN:'',DHAN_PIN:'',DHAN_TOTP_SECRET:'',ALLOW_LIVE_TRADING:'false',PORT:String(port),SCALPER_ORIGIN:origin,...extra},stdio:'pipe'});
@@ -20,6 +23,19 @@ test('production honors portal verification of the shared cookie, not forwarded 
     assert.equal((await fetch(origin+'/scalper/api/state',{headers:{'X-Authenticated-User':'owner'}})).status,401);
     const valid=await fetch(origin+'/scalper/api/state',{headers:{Cookie:'trading_session=known-session'}});assert.equal(valid.status,200);assert.equal((await valid.json()).localDemo,false);
   });}finally{await new Promise(resolve=>portal.close(resolve));}
+});
+test('restored live selection survives failed reconnect until explicitly disabled',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'scalper-restored-')),file=join(dir,'mode.json');
+  await writeFile(file,JSON.stringify({mode:'LIVE'}));
+  const portal=createServer((req,res)=>{res.writeHead(204);res.end();});await new Promise(resolve=>portal.listen(0,'127.0.0.1',resolve));
+  try{await running({LOCAL_DEMO:'false',TRADING_STATE_FILE:file,PORTAL_VERIFY_URL:`http://127.0.0.1:${portal.address().port}/verify`},async(origin,r)=>{
+    const s=await r.json();assert.equal(s.mode,'LIVE');assert.equal(s.liveReady,false);assert.equal(s.armedUntil,undefined);
+    const headers={'Content-Type':'application/json','X-CSRF-Token':s.csrf,Origin:origin};
+    assert.equal((await fetch(origin+'/scalper/api/connect',{method:'POST',headers,body:'{}'})).status,400);
+    assert.equal((await(await fetch(origin+'/scalper/api/state')).json()).mode,'LIVE');
+    assert.equal((await fetch(origin+'/scalper/api/mode',{method:'POST',headers,body:JSON.stringify({mode:'PAPER'})})).status,200);
+    assert.equal(JSON.parse(await readFile(file,'utf8')).mode,'PAPER');
+  });}finally{await new Promise(resolve=>portal.close(resolve));await rm(dir,{recursive:true,force:true});}
 });
 test('paper workflow, CSRF/origin, duplicate prevention, edit, close, live lock',()=>running({LOCAL_DEMO:'true'},async(origin,r)=>{
   const state=await r.json();const headers={'Content-Type':'application/json','X-CSRF-Token':state.csrf,Origin:origin};

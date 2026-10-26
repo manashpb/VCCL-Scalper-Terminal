@@ -34,7 +34,7 @@ or login is introduced. This is a single-owner terminal, like the workspace.
   limited to `SC`-prefixed terminal-created regular orders and excludes Super
   Order legs. Paper bulk cancellation includes all pending paper protection.
 - Quantity/freeze/notional validation, CSRF/origin checks, serialized mutations,
-  request-ID deduplication, and a timed live arming control.
+  request-ID deduplication, and an explicit persistent live-trading switch.
 
 Multi-leg mode is reserved; it has no trading implementation.
 
@@ -108,8 +108,9 @@ trading authentication, not exchange order acceptance.
    requests to all scalper routes must require login. `/verify` stays blocked
    publicly; do not expose port 5003.
 6. Connect Dhan and verify contract metadata, quotes, account books, browser token
-   and IP whitelist. Enable live deliberately; type `ENABLE LIVE` to arm for 15
-   minutes. Development/tests have placed no live orders.
+   and IP whitelist. Type `ENABLE LIVE` to enable real trading until you explicitly
+   switch back to paper. The selection persists across reloads and restarts.
+   Development/tests have placed no live orders.
 
 Rollback: stop `scalper-terminal`, remove the added Nginx location and restore
 the old portal version if desired. Journal/FNO data is untouched. Local source
@@ -121,7 +122,7 @@ file and restart procedure. Keep the GitHub repository free of this file.
 ## Execution boundaries
 
 Paper fills omit fees, slippage, margin, liquidity and exchange rejection. Paper
-books reset on restart. Live orders are never replayed; arming resets, while Dhan
+books reset on restart. Live orders are never replayed; your saved mode persists, while Dhan
 retains orders and positions. No autonomous strategy or submission retry exists.
 On timeout, order outcome may be unknown: reconcile in the broker book before
 submitting again. Fresh quote receipts are required for entry/edit/close; inactive
