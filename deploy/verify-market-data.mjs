@@ -25,7 +25,7 @@ try{
   const api=async(path,body)=>{const r=await request('/scalper/api'+path,{method:body?'POST':'GET',headers:{Cookie:cookie,Origin:origin.origin,'Content-Type':'application/json',...(token?{'X-CSRF-Token':token}:{})},body:body?JSON.stringify(body):undefined});assert.equal(r.status,200,`Request failed: ${path}`);return r.json();};
   let token='',state;
   for(let n=0;n<60;n++){state=await api('/state');token=state.csrf;if(state.marketReady)break;await new Promise(r=>setTimeout(r,1000));}
-  assert.equal(state.marketReady,true,state.marketError);assert.equal(state.demo,false);assert.equal(state.marketEnabled,true);
+  assert.equal(state.marketReady,true,state.marketError);assert.equal(state.localDemo,false);assert.equal(state.broker,'dhan');assert.equal(state.marketEnabled,true);
   const c=await api('/contracts?symbol=NIFTY');assert.ok(c.spot&&c.options.length);
   const key=i=>`${i.exchangeSegment}:${i.securityId}`;
   await api('/subscribe',{keys:[key(c.spot)]});

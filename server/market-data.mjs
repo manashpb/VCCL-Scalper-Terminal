@@ -16,7 +16,16 @@ export function snapshotQuotes(data, group, now=Date.now()) {
     if(i.expiry && String(row?.[`${prefix}SecurityId`])!==i.securityId)throw new Error('Browser quote security ID does not match selected contract/expiry');
     const q={exchangeSegment:i.exchangeSegment,securityId:i.securityId,ltp,receivedAt:acquired,source:'dhan-browser',timestampKind:'snapshot-acquisition'};
     // Underlying bid/ask is absent in the chain; never invent it from LTP.
-    if(i.expiry){q.bid=positive(row?.[`${prefix}Bid`]);q.ask=positive(row?.[`${prefix}Ask`]);if(q.bid>q.ask){q.bid=undefined;q.ask=undefined;}}
+    if (i.expiry) {
+      q.bid = positive(row?.[`${prefix}Bid`]);
+      q.ask = positive(row?.[`${prefix}Ask`]);
+      if (q.bid > q.ask) { q.bid = undefined; q.ask = undefined; }
+      q.spot = positive(data.snapshot?.uv);
+      for (const [name, suffix] of [['delta', 'D'], ['gamma', 'G'], ['theta', 'T']]) {
+        const value = row?.[prefix + suffix];
+        if (Number.isFinite(value)) q[name] = value;
+      }
+    }
     quotes.push(q);
   }
   return quotes;
@@ -27,7 +36,7 @@ export class BrowserMarketData {
     this.instruments=instruments;this.enabled=!!env.FNO_MARKETDATA_URL || env.LOCAL_DEMO!=='true';
     this.base=new URL(env.FNO_MARKETDATA_URL || 'http://127.0.0.1:8001');
     if(!['127.0.0.1','localhost','[::1]'].includes(this.base.hostname) || this.base.protocol!=='http:' || this.base.username || this.base.password)throw new Error('FNO_MARKETDATA_URL must be an HTTP loopback service');
-    this.ready=false;this.version=0;this.status=this.enabled?'Connecting browser data':'Local demo';this.error='';this.quotes=new Map();this.entries=new Map();this.expiries=new Map();this.groups=[];this.nextGroup=0;this.running=false;this.stopped=false;
+    this.ready=false;this.version=0;this.status=this.enabled?'Connecting browser data':'Local demo';this.error='';this.quotes=new Map();this.entries=new Map();this.expiries=new Map();this.groups=[];this.subscription=0;this.nextGroup=0;this.running=false;this.stopped=false;
   }
   async get(path) {
     let response;
@@ -38,7 +47,7 @@ export class BrowserMarketData {
   }
   async start(refresh=false) {
     if(!this.enabled)return;
-    this.ready=false;this.groups=[];this.quotes.clear();clearTimeout(this.timer);this.status='Connecting browser data';this.error='';
+    this.ready=false;this.subscription++;this.groups=[];this.quotes.clear();clearTimeout(this.timer);this.status='Connecting browser data';this.error='';
     try {
       await this.instruments.load(refresh);
       const map=await this.get('/api/dhan/map');
@@ -64,6 +73,7 @@ export class BrowserMarketData {
   }
   async subscribe(items) {
     if(!this.ready)throw new Error('Browser data is not ready');
+    const request=++this.subscription;
     const groups=new Map();
     const add=async(i,expiry)=>{
       await this.contracts(i.symbol,expiry);
@@ -79,6 +89,7 @@ export class BrowserMarketData {
       if(matches.length)for(const group of matches)group.items.push(i);
       else {const contracts=await this.contracts(i.symbol);if(contracts.expiries[0])await add(i,contracts.expiries[0]);}
     }
+    if(request!==this.subscription)return;
     if(groups.size>4)throw new Error('At most four symbol/expiry data groups can be monitored at once');
     this.groups=[...groups.values()];this.nextGroup=0;
     const wanted=new Set(items.map(keyOf));for(const k of this.quotes.keys())if(!wanted.has(k))this.quotes.delete(k);

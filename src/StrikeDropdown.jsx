@@ -9,8 +9,8 @@ export default function StrikeDropdown({type,options,value,onChange,spot}){
     if(!options.length)return;
     let nearest=0;const reference=spot||selected?.strike||options[0].strike;
     options.forEach((i,n)=>{if(Math.abs(i.strike-reference)<Math.abs(options[nearest].strike-reference))nearest=n;});
-    const rect=button.current.getBoundingClientRect(),width=Math.min(Math.max(rect.width,180),innerWidth-24),height=Math.min(286,options.length*34+8);
-    setPosition({width,left:Math.max(12,Math.min(rect.left,innerWidth-width-12)),top:rect.bottom+height+6<innerHeight?rect.bottom+6:Math.max(8,rect.top-height-6)});
+    const rect=button.current.getBoundingClientRect(),width=Math.min(Math.max(rect.width,180),innerWidth-24),height=Math.min(286,options.length*34+8,Math.max(34,innerHeight-24));
+    setPosition({width,maxHeight:height,left:Math.max(12,Math.min(rect.left,innerWidth-width-12)),top:rect.bottom+height+6<innerHeight?rect.bottom+6:Math.max(8,rect.top-height-6)});
     setAtm(nearest);setActive(Math.max(0,options.findIndex(i=>key(i)===value)));setOpen(true);
   }
   useLayoutEffect(()=>{if(open&&list.current)list.current.scrollTop=Math.max(0,atm*34-(list.current.clientHeight-34)/2+4);},[open]);

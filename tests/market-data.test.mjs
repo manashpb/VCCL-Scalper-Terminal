@@ -5,9 +5,9 @@ const now=Date.now();
 const option={securityId:'42',exchangeSegment:'NSE_FNO',expiry:'2099-01-01',strike:100,optionType:'CE',symbol:'TEST'};
 const spot={securityId:'43',exchangeSegment:'NSE_EQ',expiry:'',strike:0,optionType:'EQ',symbol:'TEST'};
 const group={ticker:'TEST',expiryId:123,items:[option,spot]};
-const data={source:'dhan-browser',ticker:'TEST',expiry:123,refreshed_at:new Date(now).toISOString(),snapshot:{uv:100},strikes:[{sp:100,cSecurityId:'42',cLtp:10,cBid:9,cAsk:11}]};
+const data={source:'dhan-browser',ticker:'TEST',expiry:123,refreshed_at:new Date(now).toISOString(),snapshot:{uv:100},strikes:[{sp:100,cSecurityId:'42',cLtp:10,cBid:9,cAsk:11,cD:.5,cG:.001,cT:-7}]};
 test('browser quotes keep acquisition age and missing underlying depth is unavailable',()=>{
-  const q=snapshotQuotes(data,group,now+1000);assert.equal(q[0].receivedAt,now);assert.equal(q[0].bid,9);assert.equal(q[0].ask,11);assert.equal(q[1].ltp,100);assert.equal(q[1].bid,undefined);
+  const q=snapshotQuotes(data,group,now+1000);assert.equal(q[0].receivedAt,now);assert.equal(q[0].bid,9);assert.equal(q[0].ask,11);assert.deepEqual([q[0].spot,q[0].delta,q[0].gamma,q[0].theta],[100,.5,.001,-7]);assert.equal(q[1].ltp,100);assert.equal(q[1].bid,undefined);
   assert.throws(()=>snapshotQuotes(data,group,now+6000),/stale/);
   assert.throws(()=>snapshotQuotes({...data,expiry:124},group,now),/mismatch/);
   assert.throws(()=>snapshotQuotes({...data,source:'aoc'},group,now),/mismatch/);
@@ -28,7 +28,7 @@ test('polling failures retain original quote ages and do not switch to simulatio
   const m=new BrowserMarketData({}, {FNO_MARKETDATA_URL:'http://127.0.0.1:8001'});m.groups=[group];m.ready=true;m.quotes.set('NSE_FNO:42',{ltp:10,receivedAt:now-6000});
   m.get=async()=>{throw new Error('Expired browser session');};await m.poll();m.stop();assert.equal(m.enabled,true);assert.match(m.error,/Expired/);
 });
-test('browser connection supplies paper data without trading credentials',async()=>{
+test('browser connection supplies quotes without trading credentials',async()=>{
   const expiryId=Date.parse('2099-01-01T00:00:00+05:30')/1000-315532800;
   const instruments={load:async()=>{},symbols:()=>['TEST'],contracts:()=>({expiries:['2099-01-01'],options:[option],spot})};
   const m=new BrowserMarketData(instruments,{FNO_MARKETDATA_URL:'http://127.0.0.1:8001'});

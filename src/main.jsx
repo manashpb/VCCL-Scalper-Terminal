@@ -1,102 +1,383 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import './styles.css';
 import StrikeDropdown from './StrikeDropdown.jsx';
+import { estimatePremium } from './fair-price.mjs';
+import './styles.css';
 
-const key = i => i ? `${i.exchangeSegment}:${i.securityId}` : '';
-const money = v => Number(v || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
-const isPending = o => ['PENDING','TRANSIT','PART_TRADED'].includes(o.orderStatus);
-const tick = (v,i) => Number((Math.round(v/(i?.tickSize||.05))*(i?.tickSize||.05)).toFixed(6));
-// getRandomValues also works on the existing HTTP workspace origin.
-const uuid = () => { const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const h=[...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`; };
-function Field({label,children}) { return <label className="field"><span>{label}</span>{children}</label>; }
-function NumberField({label,value,onChange,min=0,step=1}) { return <Field label={label}><input type="number" min={min} step={step} value={value} onChange={e=>onChange(e.target.value)}/></Field>; }
-function App(){
-  const [state,setState]=useState(null),[symbols,setSymbols]=useState([]),[symbol,setSymbol]=useState('NIFTY'),[expiry,setExpiry]=useState(''),[contracts,setContracts]=useState({expiries:[],options:[],spot:null});
-  const [ce,setCe]=useState(''),[pe,setPe]=useState(''),[side,setSide]=useState('CE'),[lots,setLots]=useState('1'),[sl,setSl]=useState('10'),[target,setTarget]=useState('20'),[offset,setOffset]=useState('0'),[protection,setProtection]=useState('NONE');
-  const [quantity,setQuantity]=useState(''),[shortcuts,setShortcuts]=useState(false),[tab,setTab]=useState('orders'),[sort,setSort]=useState({column:'createTime',ascending:false});
-  const [buyBasis,setBuyBasis]=useState('LIMIT'),[sellBasis,setSellBasis]=useState('LIMIT'),[buyLimit,setBuyLimit]=useState(''),[sellLimit,setSellLimit]=useState(''),[buyTrigger,setBuyTrigger]=useState(''),[sellTrigger,setSellTrigger]=useState(''),[buyGap,setBuyGap]=useState('1'),[sellGap,setSellGap]=useState('1');
-  const [message,setMessage]=useState(''),[error,setError]=useState(''),[working,setWorking]=useState(false),[settings,setSettings]=useState(false),[armText,setArmText]=useState(''),[editing,setEditing]=useState(null),[editValues,setEditValues]=useState({}),[clock,setClock]=useState(Date.now());
-  const csrf=useRef(''),inflight=useRef(false),autoStrike=useRef(''),lastSelection=useRef(''),stateRef=useRef(null);
-  const api=useCallback(async(path,method='GET',body)=>{
-    const r=await fetch(`/scalper/api${path}`,{method,headers:{'Content-Type':'application/json',...(method!=='GET'?{'X-CSRF-Token':csrf.current}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-    if(r.redirected&&new URL(r.url).pathname==='/login')throw new Error('Workspace session expired. Return to workspace and sign in.');
-    if(r.status===401)throw new Error('Workspace session expired. Return to workspace and sign in.');
-    if(!r.headers.get('content-type')?.includes('application/json'))throw new Error('Terminal server unavailable. Check workspace routing.');
-    const data=await r.json();if(!r.ok)throw new Error(data.error||'Request failed');return data;
-  },[]);
-  const refresh=useCallback(async()=>{const s=await api('/state');csrf.current=s.csrf;stateRef.current=s;setState(s);},[api]);
-  const loadSymbols=useCallback(async()=>{const data=await api('/symbols');setSymbols(data.symbols);},[api]);
-  useEffect(()=>{let active=true,timer;const poll=async()=>{try{await refresh();}catch(e){if(active)setError(e.message);}if(active)timer=setTimeout(poll,350);};poll();loadSymbols().catch(e=>setError(e.message));const c=setInterval(()=>setClock(Date.now()),500);return()=>{active=false;clearTimeout(timer);clearInterval(c);};},[refresh,loadSymbols]);
-  useEffect(()=>{let active=true;api(`/contracts?symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`).then(data=>{if(active){setContracts(data);if(!data.expiries.includes(expiry))setExpiry(data.expiries[0]||'');autoStrike.current='';}}).catch(e=>setError(e.message));return()=>{active=false;};},[api,symbol,expiry,state?.instrumentDemo,state?.marketReady,state?.marketVersion]);
-  useEffect(()=>{if(state?.marketReady)loadSymbols().catch(e=>setError(e.message));},[state?.marketReady,state?.marketVersion,loadSymbols]);
-  const ceList=contracts.options.filter(i=>i.optionType==='CE').sort((a,b)=>a.strike-b.strike),peList=contracts.options.filter(i=>i.optionType==='PE').sort((a,b)=>a.strike-b.strike);
-  const ceInstrument=ceList.find(i=>key(i)===ce),peInstrument=peList.find(i=>key(i)===pe),instrument=side==='CE'?ceInstrument:side==='PE'?peInstrument:contracts.spot;
-  const quote=state?.quotes?.[key(instrument)],spotQuote=state?.quotes?.[key(contracts.spot)],fresh=quote&&clock-quote.receivedAt<5000,lotSize=instrument?.lotSize||1;
-  useEffect(()=>{
-    const stamp=`${symbol}|${expiry}|${offset}|${state?.instrumentDemo}`;
-    if(!spotQuote?.ltp || !ceList.length || autoStrike.current===stamp)return;
-    const strikes=[...new Set(ceList.map(i=>i.strike))];let atm=0;strikes.forEach((s,n)=>{if(Math.abs(s-spotQuote.ltp)<Math.abs(strikes[atm]-spotQuote.ltp))atm=n;});
-    const strike=strikes[Math.max(0,Math.min(strikes.length-1,atm+Number(offset)))];
-    setCe(key(ceList.find(i=>i.strike===strike)));setPe(key(peList.find(i=>i.strike===strike)));autoStrike.current=stamp;
-  },[contracts,spotQuote?.ltp,offset,symbol,expiry,state?.instrumentDemo]);
-  useEffect(()=>{if(contracts.spot?.isIndex&&side==='SPOT')setSide('CE');},[contracts.spot,side]);
-  useEffect(()=>{setQuantity(String(Math.max(1,Number(lots)||1)*lotSize));},[lots,lotSize,key(instrument)]);
-  useEffect(()=>{
-    if(!state || state.marketEnabled && !state.marketReady)return;
-    const keys=[...new Set([key(contracts.spot),ce,pe,...(state.mode==='PAPER'?state.positions.filter(p=>p.netQty):[]).map(key),...state.orders.filter(isPending).map(key)].filter(k=>k&&!k.includes('DEMO-')===!state.instrumentDemo))];
-    // Demo instruments do not need a broker subscription; backend still validates selection.
-    const stamp=keys.sort().join('|');if(stamp===lastSelection.current)return;
-    lastSelection.current=stamp;api('/subscribe','POST',{keys:keys.slice(0,100)}).catch(e=>{lastSelection.current='';setError(e.message);});
-  },[api,contracts.spot,ce,pe,state?.marketReady,state?.instrumentDemo,state?.orders.length,state?.positions.length]);
-  async function action(fn,success){if(inflight.current)return;inflight.current=true;setWorking(true);setError('');setMessage('');try{await fn();await refresh();if(success)setMessage(success);}catch(e){setError(e.message);}finally{inflight.current=false;setWorking(false);}}
-  function limit(basis,value){if(basis==='LIMIT')return tick(Number(value),instrument);if(basis==='MID'){if(!quote?.bid||!quote?.ask)throw new Error('Bid and ask required for midpoint pricing');return tick((quote.bid+quote.ask)/2,instrument);}return tick(quote?.ltp,instrument);}
-  async function sendOrder(transactionType,type){
-    await action(async()=>{
-      if(!fresh)throw new Error('Wait for a fresh quote');
-      const buy=transactionType==='BUY', triggerPrice=type==='STOP_LOSS'?Number(buy?buyTrigger:sellTrigger):0;
-      const price=type==='MARKET'?0:type==='STOP_LOSS'?tick(triggerPrice+(buy?1:-1)*Number(buy?buyGap:sellGap),instrument):limit(buy?buyBasis:sellBasis,buy?buyLimit:sellLimit);
-      await api('/orders','POST',{requestId:uuid(),key:key(instrument),side:transactionType,type,quantity:Number(quantity),price,triggerPrice:tick(triggerPrice,instrument),protection,sl:Number(sl),target:Number(target)});
-    },`${transactionType} ${type.replaceAll('_',' ')} submitted · check order status`);
-  }
-  const orderRef=useRef();orderRef.current=sendOrder;
-  useEffect(()=>{const handler=e=>{if(!shortcuts||e.repeat||e.ctrlKey||e.altKey||e.metaKey||settings||editing||['INPUT','SELECT','TEXTAREA','BUTTON'].includes(e.target.tagName))return;if(e.code==='KeyB'){e.preventDefault();orderRef.current('BUY','MARKET');}if(e.code==='KeyS'){e.preventDefault();orderRef.current('SELL','MARKET');}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);},[shortcuts,settings,editing]);
-  const position=state?.positions?.find(p=>key(p)===key(instrument)),openQty=Number(position?.netQty||0),pnl=Number(position?.unrealizedProfit||0),live=state?.mode==='LIVE',readyForLive=!!state?.liveReady;
-  const disabled=working||!instrument||!fresh||live&&!readyForLive;
-  const rows=[...(tab==='orders'?state?.orders||[]:state?.positions||[])].sort((a,b)=>{const av=a[sort.column]??'',bv=b[sort.column]??'';return(typeof av==='number'&&typeof bv==='number'?av-bv:String(av).localeCompare(String(bv)))*(sort.ascending?1:-1);});
-  useEffect(()=>{if(editing&&state?.orders&&!state.orders.some(o=>o.orderId===editing.orderId&&isPending(o)))setEditing(null);},[state?.orders,editing]);
-  function saveEdit(){if(!editing)return;action(async()=>{await api(`/orders/${encodeURIComponent(editing.orderId)}`,'PUT',Object.fromEntries(Object.entries(editValues).map(([k,v])=>[k,Number(v)])));setEditing(null);},'Modification requested');}
-  function editCell(r,name){
-    const editable=editing?.orderId===r.orderId&&isPending(r);
-    if(!editable)return name==='quantity'?`${r.filledQty||0} / ${r.quantity}`:money(r[name]);
-    if(name==='price'&&r.orderType==='MARKET'||name==='triggerPrice'&&!['STOP_LOSS','STOP_LOSS_MARKET'].includes(r.orderType))return '—';
-    const lot=r.lotSize||contracts.options.find(i=>key(i)===key(r))?.lotSize||1;
-    return <input className="inline-order-input" aria-label={`Edit ${name}`} type="number" min={name==='quantity'?Math.max(lot,r.filledQty||0):0} step={name==='quantity'?lot:1} disabled={working} value={editValues[name]} onChange={e=>setEditValues(v=>({...v,[name]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveEdit();}if(e.key==='Escape')setEditing(null);}}/>;
-  }
-  function heading(column,label){return <th><button onClick={()=>setSort(s=>({column,ascending:s.column===column?!s.ascending:true}))}>{label}{sort.column===column?(sort.ascending?' ↑':' ↓'):''}</button></th>;}
-  function strikeCard(type,list,selected,setSelected){const q=state?.quotes?.[selected],available=q&&clock-q.receivedAt<5000;return <div className={`strike-card ${type==='CE'?'call':'put'}`}><div className="eyebrow">{type==='CE'?'CALL OPTION':'PUT OPTION'} <span>{type}</span></div><div className="strike-content"><Field label="Strike"><StrikeDropdown type={type} options={list} value={selected} onChange={setSelected} spot={spotQuote?.ltp}/></Field><div className="premium"><small>LAST PRICE</small><strong>{q?money(q.ltp):'—'}</strong><span className={available?'green':'muted'}>{available?'● Updating':'○ Waiting for data'}</span></div><div className="spread"><span>BID <b>{q?.bid?money(q.bid):'—'}</b></span><span>ASK <b>{q?.ask?money(q.ask):'—'}</b></span></div></div></div>;}
-  return <div className="shell">
-    <header><a className="brand" href="/" title="Back to VCCL workspace"><span className="brand-icon">V</span><span>VCCL <small>TRADING WORKSPACE</small></span></a><nav><a href="/fnoanalyzer/">FNO Analyzer</a><a href="/journal/">Trading Journal</a><a className="active" href="/scalper/">Scalper Terminal</a></nav><button className="icon-button" onClick={()=>setSettings(true)}>⚙ <span>Dhan connection</span></button></header>
-    <main><div className="title-row"><div><div className="eyebrow">EXECUTION DESK <span>/ DHANHQ</span></div><h1>Scalper Terminal <span className={live?'badge red-badge':'badge'}>{live?'LIVE TRADING':'PAPER TRADING'}</span></h1></div><div className="connection"><span className={`dot ${state?.connected?'on':''}`}/><div><strong>{state?.marketEnabled?state.feed:'Demo market feed'}</strong><small>{new Date(clock).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · {state?.marketEnabled?'Dhan browser data':'Simulated prices'}</small></div></div></div>
-    <div className="mode-tabs"><button className="selected">⚡ Scalping</button><button onClick={()=>setMessage('Multi-leg workspace is reserved for a later release.')}>Multi-leg <small>SOON</small></button><span>{state?.marketEnabled?'Browser market data · DhanHQ trading only':'Paper sandbox · no broker orders'}</span></div>
-    {(error||message)&&<div role={error?'alert':'status'} className={`notice ${error?'error':''}`}><span>{error||message}</span><button aria-label="Dismiss message" onClick={()=>{setError('');setMessage('');}}>×</button></div>}
-    {state?.marketError&&<div className="notice error" role="alert">Browser market data: {state.marketError}. Use VCCL Token Sync to refresh the Dhan browser session, then reconnect data.</div>}
-    {state?.bookError&&<div className="notice error">Broker books unavailable: {state.bookError}. Reconcile in Dhan before further orders.</div>}
-    <section className="terminal">
-      <div className="config-row"><NumberField label="Lots" value={lots} onChange={setLots} min={1}/><NumberField label="Default SL · pts" value={sl} onChange={setSl} min={0} step={1}/><NumberField label="Target · pts" value={target} onChange={setTarget} min={0} step={1}/><Field label="Underlying"><input aria-label="Underlying" list="symbols" value={symbol} onChange={e=>{setSymbol(e.target.value.toUpperCase());setExpiry('');setCe('');setPe('');}}/><datalist id="symbols">{symbols.map(s=><option key={s} value={s}/>)}</datalist></Field><Field label="Expiry"><select value={expiry} onChange={e=>{setExpiry(e.target.value);setCe('');setPe('');}}>{contracts.expiries.map(e=><option key={e}>{e}</option>)}</select></Field><Field label="Strike position"><select value={offset} onChange={e=>setOffset(e.target.value)}>{[3,2,1,0,-1,-2,-3].map(n=><option key={n} value={n}>{n===0?'ATM':`ATM${n>0?'+':''}${n}`}</option>)}</select></Field><Field label="Auto SL / target"><select value={protection} onChange={e=>setProtection(e.target.value)}><option value="NONE">None</option><option value="SL">Only SL{live?' · paper only':''}</option><option value="BOTH">SL and target</option></select></Field></div>
-      <div className="market-row">{strikeCard('CE',ceList,ce,setCe)}<div className="spot"><div className="eyebrow">{symbol || 'UNDERLYING'} <span>SPOT</span></div><strong>{spotQuote?money(spotQuote.ltp):'—'}</strong><small>{state?.marketEnabled?'BROWSER SNAPSHOT':'SIMULATED MARKET'}</small><svg viewBox="0 0 180 30" aria-hidden="true"><path d="M0 25L12 21 24 24 36 13 48 17 60 11 72 16 84 8 96 12 108 5 120 10 132 3 144 8 156 2 168 6 180 1"/></svg></div>{strikeCard('PE',peList,pe,setPe)}</div>
-      <div className="selection-row"><label className="switch"><input type="checkbox" checked={shortcuts} onChange={e=>setShortcuts(e.target.checked)}/><span/>Shortcuts <kbd>B / S</kbd></label><div className="segmented">{['CE','SPOT','PE'].map(s=><button key={s} className={side===s?'selected':''} disabled={s==='SPOT'&&(!contracts.spot||contracts.spot.isIndex)} onClick={()=>setSide(s)}>Select {s==='SPOT'?'spot':s}</button>)}</div><label className={`switch ${live?'live-switch':''}`}><input type="checkbox" checked={live} onChange={e=>e.target.checked?setSettings(true):action(()=>api('/mode','POST',{mode:'PAPER'}),'Paper trading selected')}/><span/>Real trading</label></div>
-      <div className={`selected-contract contract-${side.toLowerCase()}`}><span className={`dot ${fresh?'on':''}`}/><strong>{instrument?.tradingSymbol||'Select an underlying and contract'}</strong><span>{instrument?.exchangeSegment || '—'}</span><span>LOT {lotSize} · TICK {instrument?.tickSize||'—'}</span>{live&&!readyForLive&&<b className="red">Live enabled · reconnect trading/data</b>}</div>
-      <div className="execution-grid"><div className="buy-controls"><div className="order-line"><button disabled={disabled} className="trade buy" onClick={()=>sendOrder('BUY','MARKET')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}BUY MARKET <kbd>B</kbd></button></div><div className="order-line"><button disabled={disabled} className="trade buy-outline" onClick={()=>sendOrder('BUY','LIMIT')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}BUY LIMIT</button><select aria-label="Buy limit pricing" value={buyBasis} onChange={e=>setBuyBasis(e.target.value)}><option value="LTP">LTP</option><option value="MID">Average</option><option value="LIMIT">Limit</option></select><input aria-label="Buy limit price" type="number" step={1} placeholder="Price" disabled={buyBasis!=='LIMIT'} value={buyLimit} onChange={e=>setBuyLimit(e.target.value)}/></div><div className="order-line sl-line"><button disabled={disabled} className="trade buy-outline" onClick={()=>sendOrder('BUY','STOP_LOSS')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}BUY SL</button><NumberField label="Trigger" value={buyTrigger} onChange={setBuyTrigger} step={1}/><NumberField label="Limit gap" value={buyGap} onChange={setBuyGap} step={1}/></div><small className="calculated">SL limit: {buyTrigger?money(tick(Number(buyTrigger)+Number(buyGap),instrument)):'—'}</small></div>
-      <div className="quantity"><div className="eyebrow">ORDER QUANTITY</div><div className="stepper"><button aria-label="Decrease quantity" onClick={()=>setQuantity(String(Math.max(lotSize,Number(quantity)-lotSize)))}>−</button><input aria-label="Order quantity" type="number" min={lotSize} step={lotSize} value={quantity} onChange={e=>setQuantity(e.target.value)}/><button aria-label="Increase quantity" onClick={()=>setQuantity(String(Number(quantity)+lotSize))}>+</button></div><span>{Number(quantity)/lotSize || 0} lots × {lotSize}</span><hr/><small>EST. PREMIUM VALUE</small><strong>₹{money((quote?.ltp||0)*Number(quantity))}</strong><small>{protection==='NONE'?'No automatic protection':protection==='SL'?'Stop loss only':`SL ${sl} pts / target ${target} pts`}</small></div>
-      <div className="sell-controls"><div className="order-line"><button disabled={disabled} className="trade sell" onClick={()=>sendOrder('SELL','MARKET')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}SELL MARKET <kbd>S</kbd></button></div><div className="order-line"><button disabled={disabled} className="trade sell-outline" onClick={()=>sendOrder('SELL','LIMIT')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}SELL LIMIT</button><select aria-label="Sell limit pricing" value={sellBasis} onChange={e=>setSellBasis(e.target.value)}><option value="LTP">LTP</option><option value="MID">Average</option><option value="LIMIT">Limit</option></select><input aria-label="Sell limit price" type="number" step={1} placeholder="Price" disabled={sellBasis!=='LIMIT'} value={sellLimit} onChange={e=>setSellLimit(e.target.value)}/></div><div className="order-line sl-line"><button disabled={disabled} className="trade sell-outline" onClick={()=>sendOrder('SELL','STOP_LOSS')}>{side === 'CE' || side === 'PE' ? `${side} ` : ''}SELL SL</button><NumberField label="Trigger" value={sellTrigger} onChange={setSellTrigger} step={1}/><NumberField label="Limit gap" value={sellGap} onChange={setSellGap} step={1}/></div><small className="calculated">SL limit: {sellTrigger?money(tick(Number(sellTrigger)-Number(sellGap),instrument)):'—'}</small></div></div>
-      <div className="position-strip"><button disabled={working||!openQty||live&&!readyForLive} onClick={()=>{if(!live||window.confirm(`Close ${openQty} units of ${instrument?.tradingSymbol}?`))action(()=>api('/close','POST',{key:key(instrument)}),'Close order submitted');}}>↙ Close selected position</button><div><span>OPEN QUANTITY <b>{openQty}</b></span><span>OPEN P&L <b className={pnl>=0?'green':'red'}>{pnl>=0?'+':''}₹{money(pnl)}</b></span></div><button disabled={working||live&&!readyForLive} onClick={()=>{if(window.confirm(live?'Cancel terminal-created regular pending orders? Super Order protection is excluded.':'Cancel all paper pending orders, including protection?'))action(()=>api('/cancel-pending','POST',{}),'Pending order cancellation processed');}}>Cancel pending orders ×</button></div>
-    </section>
-    <section className="books"><div className="book-toolbar"><div className="book-tabs"><button className={tab==='orders'?'selected':''} onClick={()=>{setTab('orders');setSort({column:'createTime',ascending:false});}}>Order book <span>{state?.orders?.length||0}</span></button><button className={tab==='positions'?'selected':''} onClick={()=>{setTab('positions');setSort({column:'tradingSymbol',ascending:true});}}>Positions <span>{state?.positions?.length||0}</span></button></div><span>{live?'Dhan account · all orders and positions':'Paper account · current server session'} <i className="dot on"/> Auto refresh</span></div>
-    <div className="table-scroll"><table><thead><tr>{heading('tradingSymbol','Instrument')}{tab==='orders'?<>{heading('transactionType','Side')}{heading('orderType','Type')}{heading('quantity','Qty')}{heading('price','Price')}{heading('triggerPrice','Trigger')}{heading('averageTradedPrice','Avg. fill')}{heading('orderStatus','Status')}<th>Actions</th></>:<>{heading('netQty','Net qty')}{heading('buyAvg','Buy avg')}{heading('sellAvg','Sell avg')}{heading('realizedProfit','Realized')}{heading('unrealizedProfit','Unrealized')}<th>State</th></>}</tr></thead><tbody>{rows.map((r,n)=><tr key={r.orderId||key(r)+n} data-order-id={r.orderId} className={editing?.orderId===r.orderId?'order-row-editing':''}><td><strong>{r.tradingSymbol||r.securityId}</strong><small>{r.exchangeSegment} · {r.orderId?.slice(-8)}</small></td>{tab==='orders'?<><td className={r.transactionType==='BUY'?'green':'red'}>{r.transactionType}</td><td>{r.orderType}</td><td>{editCell(r,'quantity')}</td><td>{editCell(r,'price')}</td><td>{editCell(r,'triggerPrice')}</td><td>{money(r.averageTradedPrice)}</td><td><span className={`status ${r.orderStatus.toLowerCase()}`}>{r.orderStatus}</span>{r.omsErrorDescription&&<small className="red">{r.omsErrorDescription}</small>}{r.group&&<small>OCO protection</small>}</td><td>{isPending(r)&&<>{editing?.orderId===r.orderId?<><button className="table-button edit-save" aria-label="Save order modifications" title="Modify order" disabled={working} onClick={saveEdit}>✓</button><button className="table-button edit-discard" aria-label="Discard order modifications" title="Discard modifications" disabled={working} onClick={()=>setEditing(null)}>×</button></>:<button className="table-button" disabled={working} onClick={()=>{setEditing(r);setEditValues({quantity:r.quantity,price:r.price,triggerPrice:r.triggerPrice||0});}}>Edit</button>}<button className="table-button red" disabled={working} onClick={()=>action(async()=>{await api(`/orders/${encodeURIComponent(r.orderId)}`,'DELETE');if(editing?.orderId===r.orderId)setEditing(null);},'Cancellation requested')}>Cancel</button></>}</td></>:<><td>{r.netQty}</td><td>{money(r.buyAvg)}</td><td>{money(r.sellAvg)}</td><td className={r.realizedProfit>=0?'green':'red'}>{money(r.realizedProfit)}</td><td className={r.unrealizedProfit>=0?'green':'red'}>{money(r.unrealizedProfit)}</td><td><span className="status">{r.netQty?'OPEN':'CLOSED'}</span></td></>}</tr>)}</tbody></table>{!rows.length&&<div className="empty"><div>▤</div><strong>{tab==='orders'?'Your orders will appear here':'No positions yet'}</strong><span>{state?.connected?'Choose a contract to get started.':'Explore the terminal with simulated prices and paper orders.'}</span></div>}</div></section>
-    <footer><span><i className="dot on"/> {live?'REAL MONEY · broker execution':state?.marketEnabled?'PAPER EXECUTION · BROWSER DATA':'DEMO DATA · PAPER EXECUTION'}</span><span>{fresh?'Quote current':'Waiting for fresh quote'} · Intraday · {state?.localDemo?'Local development':'VCCL shared login'}</span></footer></main>
-    {settings&&<div className="overlay"><section role="dialog" aria-modal="true" aria-label="Dhan connection" className="modal"><div className="modal-heading"><h2>Dhan connection</h2><button aria-label="Close connection settings" onClick={()=>setSettings(false)}>×</button></div><p>Trading credentials stay on the backend. Market data uses the existing FNO browser-token service. Configure the private <code>.env</code> file, then connect your account.</p><div className="checklist"><span>Credentials <b>{state?.credentialsConfigured?'Configured':'Required'}</b></span><span>Static outbound IP <b>{state?.staticIpConfigured?'Configured · verify whitelist in Dhan':'Required for live orders'}</b></span><span>Server live execution <b>{state?.liveAllowed?'Enabled':'Disabled'}</b></span><span>Browser market data <b>{state?.feed}</b></span><span>DhanHQ trading <b>{state?.connected?'Connected':'Disconnected'}</b></span></div><div className="modal-actions"><button disabled={working} onClick={()=>action(async()=>{await api('/connect','POST',{});await loadSymbols();},'Dhan connected')}>Connect trading API</button><button disabled={working||!state?.connected||live} onClick={()=>action(()=>api('/disconnect','POST',{}),'Dhan disconnected')}>Disconnect</button></div><button disabled={working||!state?.marketEnabled} onClick={()=>action(()=>api('/market/reconnect','POST',{}),'Browser market data reconnected')}>Reconnect browser data</button><hr/><h3>Real trading</h3><p>Type <strong>ENABLE LIVE</strong> to enable real orders until you explicitly disable live trading. Your choice persists across reloads and service restarts. Broker orders persist when the terminal closes. Super Order legs must be managed in Dhan.</p><input aria-label="Live trading acknowledgment" value={armText} onChange={e=>setArmText(e.target.value)} placeholder="ENABLE LIVE" autoComplete="off"/><button className="trade sell" disabled={working||armText!=='ENABLE LIVE'||!state?.liveAllowed||!state?.connected} onClick={()=>action(async()=>{await api('/mode','POST',{mode:'LIVE',ack:armText});setSettings(false);setArmText('');},'Live trading enabled until you disable it')}>Enable real trading</button><button onClick={()=>action(()=>api('/mode','POST',{mode:'PAPER'}),'Paper mode selected')}>Return to paper trading</button><small>Live Only SL and protected SL-limit entries are unavailable. Use SL and target with market/limit entries, or None. Paper books reset when the server restarts.</small>{error&&<p role="alert" className="red">{error}</p>}</section></div>}
-
-  </div>;
+const key = i => i ? i.exchangeSegment + ':' + i.securityId : '';
+const money = v => Number.isFinite(v) ? v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+const pending = o => ['PENDING', 'TRANSIT', 'PART_TRADED'].includes(o.orderStatus);
+const brokerNames = { dhan: 'Dhan', zerodha: 'Zerodha' };
+const emptyContracts = { expiries: [], options: [], spot: null };
+const tick = (v, i) => Number((Math.round(v / i.tickSize) * i.tickSize).toFixed(6));
+function uuid() {
+  // getRandomValues works on the existing HTTP workspace origin.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
 }
+function Field({ label, children }) {
+  return <label className="field"><span>{label}</span>{React.Children.map(children, child =>
+    ['input', 'select'].includes(child.type) ? React.cloneElement(child, { 'aria-label': label }) : child
+  )}</label>;
+}
+function NumberField({ label, value, change, min = 0, step = 'any', placeholder }) {
+  return <Field label={label}><input type="number" value={value} min={min} step={step}
+    placeholder={placeholder} onChange={e => change(e.target.value)}/></Field>;
+}
+function FairPrice({ contract, quote, now }) {
+  const [entry, setEntry] = useState(''), [sl, setSl] = useState('25'), [target, setTarget] = useState('50');
+  const [direction, setDirection] = useState('BUY');
+  const liveSpot = now - quote?.receivedAt < 5000 ? quote.spot : null;
+  const spot = entry === '' ? liveSpot : Number(entry);
+  const sign = (contract?.optionType === 'PE' ? -1 : 1) * (direction === 'SELL' ? -1 : 1);
+  const levels = [
+    ['Entry', spot],
+    ['SL', spot > 0 && sl !== '' && Number(sl) >= 0 ? spot - sign * Number(sl) : null],
+    ['Target', spot > 0 && target !== '' && Number(target) >= 0 ? spot + sign * Number(target) : null]
+  ];
+  const premium = level => money(estimatePremium(quote, level, contract, now));
+  return <details className="fair"><summary>Fair price <strong>{premium(spot)}</strong></summary>
+    <div className="fair-inputs">
+      <Field label="Scenario side"><select value={direction} onChange={e => setDirection(e.target.value)}>
+        <option value="BUY">Buy</option><option value="SELL">Sell</option>
+      </select></Field>
+      <NumberField label="Entry spot" value={entry} change={setEntry} min=".01" placeholder={liveSpot?.toFixed(2) || 'Live spot'}/>
+      <NumberField label="SL spot pts" value={sl} change={setSl}/>
+      <NumberField label="Target spot pts" value={target} change={setTarget}/>
+    </div>
+    <div className="fair-results">{levels.map(([label, level]) =>
+      <span key={label}>{label} <b>{premium(level)}</b><small>Spot {level > 0 ? money(level) : '—'}</small></span>)}</div>
+    <small>Estimated premium per unit using the Dhan quote and its delta, gamma and theta.</small>
+  </details>;
+}
+
+function App() {
+  const [broker, setBroker] = useState(() => localStorage.getItem('scalper-broker') === 'zerodha' ? 'zerodha' : 'dhan');
+  const [state, setState] = useState(null), [symbols, setSymbols] = useState([]);
+  const [symbol, setSymbol] = useState('NIFTY'), [expiry, setExpiry] = useState('');
+  const [contracts, setContracts] = useState(emptyContracts), [side, setSide] = useState('CE');
+  const [strike, setStrike] = useState({}), [offset, setOffset] = useState('0');
+  const [lots, setLots] = useState('1'), [type, setType] = useState('MARKET');
+  const [basis, setBasis] = useState('LIMIT'), [price, setPrice] = useState(''), [trigger, setTrigger] = useState(''), [gap, setGap] = useState('1');
+  const [protect, setProtect] = useState(false), [sl, setSl] = useState('10'), [target, setTarget] = useState('20');
+  const [shortcuts, setShortcuts] = useState(false), [tab, setTab] = useState('orders');
+  const [settings, setSettings] = useState(false), [ack, setAck] = useState('');
+  const [kiteUrl, setKiteUrl] = useState(''), [callback, setCallback] = useState('');
+  const [edit, setEdit] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState('');
+  const [working, setWorking] = useState(false), [now, setNow] = useState(Date.now());
+  const csrf = useRef(''), inflight = useRef(false), activeBroker = useRef(broker);
+  const api = useCallback(async (path, method = 'GET', data) => {
+    const headers = { 'X-Scalper-Broker': broker };
+    if (method !== 'GET') Object.assign(headers, { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.current });
+    const response = await fetch('/scalper/api' + path, { method, headers, body: data === undefined ? undefined : JSON.stringify(data) });
+    if (response.status === 401 || response.redirected) throw new Error('Workspace session expired. Sign in again.');
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result) throw new Error(result?.error || 'Terminal server unavailable');
+    return result;
+  }, [broker]);
+  const refresh = useCallback(async () => {
+    const next = await api('/state');
+    if (activeBroker.current === next.broker) {
+      csrf.current = next.csrf;
+      setState(next);
+      setNow(Date.now());
+    }
+  }, [api]);
+  useEffect(() => {
+    let active = true, timer;
+    const poll = async () => {
+      try { await refresh(); }
+      catch (err) { if (active) setError(err.message); }
+      if (active) timer = setTimeout(poll, 450);
+    };
+    poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [refresh]);
+  useEffect(() => {
+    let active = true;
+    api('/symbols').then(data => { if (active) setSymbols(data.symbols); })
+      .catch(err => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, [api, state?.marketVersion]);
+  useEffect(() => {
+    let active = true;
+    api('/contracts?symbol=' + encodeURIComponent(symbol) + '&expiry=' + encodeURIComponent(expiry)).then(data => {
+      if (!active) return;
+      setContracts(data);
+      if (!data.expiries.includes(expiry)) setExpiry(data.expiries[0] || '');
+    }).catch(err => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, [api, symbol, expiry, state?.marketVersion]);
+
+  const options = contracts.options.filter(i => i.symbol === symbol && i.expiry === expiry && i.optionType === side)
+    .sort((a, b) => a.strike - b.strike);
+  const spotQuote = state?.quotes?.[key(contracts.spot)];
+  const spot = now - spotQuote?.receivedAt < 5000 ? spotQuote.ltp : null;
+  const selected = strike[side];
+  const instrument = options.find(i => key(i) === selected);
+  const instrumentKey = key(instrument);
+  const quote = state?.quotes?.[instrumentKey];
+  const fresh = now - quote?.receivedAt < 5000;
+  const lotSize = instrument?.lotSize || 0;
+  const quantity = Number(lots) * lotSize;
+  useEffect(() => {
+    if (instrument || !options.length || !spot) return;
+    const atm = options.reduce((best, option, index) =>
+      Math.abs(option.strike - spot) < Math.abs(options[best].strike - spot) ? index : best, 0);
+    const i = options[Math.max(0, Math.min(options.length - 1, atm + Number(offset)))];
+    setStrike(previous => ({ ...previous, [side]: key(i) }));
+  }, [instrument, options, spot, side, offset]);
+  const spotKey = key(contracts.spot);
+  const marketReady = !!state && (!state.marketEnabled || state.marketReady);
+  useEffect(() => {
+    if (!marketReady || !spotKey) return;
+    let active = true, retry;
+    const subscribe = () => api('/subscribe', 'POST', { keys: [spotKey, instrumentKey].filter(Boolean) })
+      .catch(err => {
+        if (!active) return;
+        setError(err.message);
+        retry = setTimeout(subscribe, 2500);
+      });
+    subscribe();
+    return () => { active = false; clearTimeout(retry); };
+  }, [api, marketReady, state?.marketVersion, spotKey, instrumentKey]);
+  async function action(fn, success) {
+    if (inflight.current) return;
+    inflight.current = true;
+    setWorking(true); setError(''); setMessage('');
+    try {
+      await fn();
+      await refresh();
+      if (success) setMessage(success);
+    } catch (err) { setError(err.message); }
+    finally { inflight.current = false; setWorking(false); }
+  }
+  function changeBroker(value) {
+    activeBroker.current = value;
+    localStorage.setItem('scalper-broker', value);
+    setBroker(value); setState(null); setEdit(null); setAck(''); setKiteUrl(''); setCallback('');
+    setProtect(false); setShortcuts(false); setError(''); setMessage('');
+  }
+  function changeContract() {
+    setStrike({}); setPrice(''); setTrigger(''); setEdit(null);
+  }
+  const ready = !working && !!state?.liveReady && !!instrument && fresh && Number.isInteger(Number(lots)) && quantity > 0;
+  const canManage = !working && !!state?.canManage;
+  const protection = protect && broker === 'dhan' && type !== 'STOP_LOSS' ? 'BOTH' : 'NONE';
+  async function sendOrder(transactionType, orderType = type) {
+    if (!ready) return;
+    await action(async () => {
+      let limit = 0, triggerPrice = 0;
+      if (orderType === 'LIMIT') {
+        if (basis === 'MID' && (!quote.bid || !quote.ask)) throw new Error('Bid and ask are required for midpoint pricing');
+        limit = tick(basis === 'MID' ? (quote.bid + quote.ask) / 2 : basis === 'LTP' ? quote.ltp : Number(price), instrument);
+      } else if (orderType === 'STOP_LOSS') {
+        triggerPrice = tick(Number(trigger), instrument);
+        limit = tick(triggerPrice + (transactionType === 'BUY' ? 1 : -1) * Number(gap), instrument);
+      }
+      await api('/orders', 'POST', {
+        requestId: uuid(), key: instrumentKey, side: transactionType, type: orderType, quantity, price: limit,
+        triggerPrice, protection: orderType === 'STOP_LOSS' ? 'NONE' : protection, sl: Number(sl), target: Number(target)
+      });
+    }, transactionType + ' order submitted to ' + brokerNames[broker]);
+  }
+  const orderAction = useRef(null);
+  orderAction.current = sendOrder;
+  useEffect(() => {
+    const handle = e => {
+      if (!shortcuts || settings || edit || e.repeat || e.ctrlKey || e.altKey || e.metaKey ||
+          ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'SUMMARY'].includes(e.target.tagName)) return;
+      if (e.code !== 'KeyB' && e.code !== 'KeyS') return;
+      e.preventDefault();
+      orderAction.current(e.code === 'KeyB' ? 'BUY' : 'SELL', 'MARKET');
+    };
+    window.addEventListener('keydown', handle);
+    return () => window.removeEventListener('keydown', handle);
+  }, [shortcuts, settings, edit]);
+  const orders = state?.orders || [], positions = state?.positions || [];
+  const selectedPositions = positions.filter(p => key(p) === instrumentKey && Number(p.netQty));
+  const closeSupported = p => (broker === 'dhan' ? ['INTRADAY', 'MARGIN'] : ['MIS', 'NRML']).includes(p.productType);
+  const regular = o => broker === 'zerodha' ? o.variety === 'regular' && !o.parentOrderId :
+    !state?.superOrders?.some(s => s.orderId === o.orderId || s.legDetails?.some(l => l.orderId === o.orderId));
+  function closePosition(p) {
+    if (window.confirm('Close ' + Math.abs(p.netQty) + ' units of ' + p.tradingSymbol + ' (' + p.productType + ') at ' + brokerNames[broker] + '?')) {
+      action(() => api('/close', 'POST', { key: key(p), product: p.productType, netQty: Number(p.netQty) }),
+        'Close order submitted. Check the order book.');
+    }
+  }
+  function saveEdit() {
+    const { id, quantity, price, triggerPrice } = edit;
+    action(async () => {
+      await api('/orders/' + encodeURIComponent(id), 'PUT', {
+        quantity: Number(quantity), price: Number(price), triggerPrice: Number(triggerPrice)
+      });
+      setEdit(null);
+    }, 'Modification requested');
+  }
+  const orderRows = [...orders].sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')));
+  const book = tab === 'orders' ? orderRows : positions;
+  const errors = error || state?.marketError || state?.bookError;
+  const orderLabel = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'SL' }[type];
+
+  return <main className="scalper">
+    <header className="bar">
+      <div><a className="workspace" href="/" title="VCCL workspace">V</a><h1>Scalper</h1></div>
+      <div>
+        <select aria-label="Trading broker" value={broker} disabled={working} onChange={e => changeBroker(e.target.value)}>
+          <option value="dhan">Dhan</option><option value="zerodha">Zerodha</option>
+        </select>
+        <button onClick={() => setSettings(true)} title="Broker settings"><i className={state?.connected ? 'dot on' : 'dot'}/> Connection</button>
+      </div>
+    </header>
+    {(errors || message) && <div className={'notice ' + (errors ? 'error' : '')} role={errors ? 'alert' : 'status'}>
+      <span>{errors || message}</span><button aria-label="Dismiss message" onClick={() => { setError(''); setMessage(''); }}>×</button>
+    </div>}
+    <section className="ticket" aria-label="Order ticket">
+      <div className="contract-inputs">
+        <Field label="Underlying"><input list="symbols" value={symbol} onChange={e => {
+          changeContract(); setContracts(emptyContracts); setSymbol(e.target.value.toUpperCase()); setExpiry('');
+        }}/><datalist id="symbols">{symbols.map(s => <option key={s} value={s}/>)}</datalist></Field>
+        <Field label="Expiry"><select value={expiry} onChange={e => { changeContract(); setExpiry(e.target.value); }}>
+          {contracts.expiries.map(e => <option key={e}>{e}</option>)}
+        </select></Field>
+        <div className="field"><span>Option</span><div className="segmented" aria-label="Option type">
+          {['CE', 'PE'].map(s => <button key={s} aria-pressed={side === s} onClick={() => {
+            if (side !== s) { setPrice(''); setTrigger(''); setEdit(null); setSide(s); }
+          }}>{s}</button>)}
+        </div></div>
+        <Field label="ATM offset"><select value={offset} onChange={e => { changeContract(); setOffset(e.target.value); }}>
+          {[3, 2, 1, 0, -1, -2, -3].map(n => <option key={n} value={n}>{n ? (n > 0 ? '+' : '') + n : 'ATM'}</option>)}
+        </select></Field>
+      </div>
+      <div className="quote-row">
+        <Field label="Strike"><StrikeDropdown type={side} options={options} value={instrumentKey} spot={spot}
+          onChange={value => { setPrice(''); setTrigger(''); setEdit(null); setStrike(previous => ({ ...previous, [side]: value })); }}/></Field>
+        <span className="price"><small>LTP</small><b>{fresh ? money(quote.ltp) : '—'}</b></span>
+        <span><small>Bid / Ask</small><b>{fresh ? money(quote.bid) + ' / ' + money(quote.ask) : '—'}</b></span>
+        <span><small>Spot</small><b>{money(spot)}</b></span>
+      </div>
+      <div className="contract-status"><span title={instrument?.tradingSymbol}>{instrument?.tradingSymbol || 'Select a contract'}</span>
+        <span className={fresh ? 'green' : 'muted'}>{state?.localDemo ? 'Preview' : fresh ? 'Dhan quotes' : 'Waiting for quote'}</span></div>
+      <div className="order-fields">
+        <NumberField label={'Lots' + (lotSize ? ' × ' + lotSize : '')} value={lots} change={setLots} min={1} step={1}/>
+        <Field label="Order type"><select value={type} onChange={e => setType(e.target.value)}>
+          <option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP_LOSS">SL limit</option>
+        </select></Field>
+        {type === 'LIMIT' && <>
+          <Field label="Limit basis"><select value={basis} onChange={e => setBasis(e.target.value)}>
+            <option value="LIMIT">Manual</option><option value="LTP">LTP</option><option value="MID">Midpoint</option>
+          </select></Field>
+          {basis === 'LIMIT' && <NumberField label="Limit price" value={price} change={setPrice}/>}
+        </>}
+        {type === 'STOP_LOSS' && <>
+          <NumberField label="Trigger price" value={trigger} change={setTrigger}/>
+          <NumberField label="Limit gap" value={gap} change={setGap}/>
+        </>}
+      </div>
+      <div className="trade-row">
+        <button className="buy" disabled={!ready} onClick={() => sendOrder('BUY')}>Buy {side} · {orderLabel}</button>
+        <button className="sell" disabled={!ready} onClick={() => sendOrder('SELL')}>Sell {side} · {orderLabel}</button>
+      </div>
+      <div className="extras">
+        <label><input type="checkbox" checked={shortcuts} disabled={!state?.armed} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
+        {broker === 'dhan' && type !== 'STOP_LOSS' &&
+          <label><input type="checkbox" checked={protect} onChange={e => setProtect(e.target.checked)}/> Dhan SL + target</label>}
+        <span>{state?.armed ? 'Orders enabled' : 'New orders off'}</span>
+      </div>
+      {protection === 'BOTH' && <div className="order-fields">
+        <NumberField label="Premium SL pts" value={sl} change={setSl}/>
+        <NumberField label="Premium target pts" value={target} change={setTarget}/>
+      </div>}
+      <FairPrice key={symbol} contract={instrument} quote={quote} now={now}/>
+    </section>
+
+    <section className="books" aria-label={brokerNames[broker] + ' account'}>
+      <div className="book-tools">
+        <div className="segmented">
+          <button aria-pressed={tab === 'orders'} onClick={() => setTab('orders')}>Orders · {orders.length}</button>
+          <button aria-pressed={tab === 'positions'} onClick={() => setTab('positions')}>Positions · {positions.length}</button>
+        </div>
+        <button disabled={!canManage} onClick={() => {
+          if (window.confirm('Cancel terminal-created regular pending orders at ' + brokerNames[broker] + '?')) {
+            action(() => api('/cancel-pending', 'POST', {}), 'Pending order cancellation processed');
+          }
+        }}>Cancel pending</button>
+      </div>
+      {selectedPositions.length ? <div className="position-strip">{selectedPositions.map(p =>
+        <div key={p.productType}><span>{p.productType} · {p.netQty} units · P&L {money(p.unrealizedProfit)}</span>
+          <button disabled={!canManage || !fresh || !closeSupported(p)} onClick={() => closePosition(p)}>Close selected</button></div>)}</div> : null}
+      {book.length ? <div className="table-scroll" tabIndex={0} aria-label={tab === 'orders' ? 'Order book' : 'Positions'}>
+        <table><thead><tr><th>Contract</th>{tab === 'orders'
+          ? <><th>Order</th><th>Fill / Qty</th><th>Limit / SL</th><th>Status</th><th>Actions</th></>
+          : <><th>Qty</th><th>Buy / Sell avg</th><th>Realized</th><th>Unrealized</th></>}</tr></thead>
+          <tbody>{book.map(row => {
+            const editing = tab === 'orders' && edit?.id === row.orderId && pending(row);
+            return <tr key={tab === 'orders' ? row.orderId : key(row) + row.productType}>
+              <td><strong>{row.tradingSymbol || row.securityId}</strong><small>{row.productType}</small></td>
+              {tab === 'orders' ? <>
+                <td>{row.transactionType}<small>{row.orderType}</small></td>
+                <td>{editing ? <NumberField label="Quantity" value={edit.quantity} min={lotSize} step={lotSize} change={v => setEdit({ ...edit, quantity: v })}/>
+                  : (row.filledQty || 0) + ' / ' + row.quantity}</td>
+                <td>{editing && row.orderType !== 'MARKET'
+                  ? <NumberField label="Limit price" value={edit.price} change={v => setEdit({ ...edit, price: v })}/> : money(row.price)}
+                  {editing && row.orderType === 'STOP_LOSS'
+                    ? <NumberField label="Trigger price" value={edit.triggerPrice} change={v => setEdit({ ...edit, triggerPrice: v })}/>
+                    : row.triggerPrice > 0 && <small>SL {money(row.triggerPrice)}</small>}</td>
+                <td>{row.orderStatus}<small>{row.averageTradedPrice > 0 ? 'Avg ' + money(row.averageTradedPrice) : row.omsErrorDescription}</small></td>
+                <td>{pending(row) && regular(row) && <div className="row-actions">
+                  {editing ? <><button disabled={working} onClick={saveEdit}>Save</button><button onClick={() => setEdit(null)}>Discard</button></>
+                    : <button disabled={!state?.liveReady || !fresh || key(row) !== instrumentKey || working ||
+                      !['MARKET', 'LIMIT', 'STOP_LOSS'].includes(row.orderType)} onClick={() => setEdit({
+                        id: row.orderId, quantity: row.quantity, price: row.price, triggerPrice: row.triggerPrice || 0
+                      })}>Edit</button>}
+                  <button disabled={!canManage} onClick={() => action(async () => {
+                    await api('/orders/' + encodeURIComponent(row.orderId), 'DELETE'); setEdit(null);
+                  }, 'Cancellation requested')}>Cancel</button>
+                </div>}</td>
+              </> : <><td>{row.netQty}</td><td>{money(row.buyAvg)} / {money(row.sellAvg)}</td>
+                <td>{money(row.realizedProfit)}</td><td>{money(row.unrealizedProfit)}</td></>}
+            </tr>;
+          })}</tbody></table>
+      </div> : <p className="empty">{state?.connected ? 'No ' + tab + ' at ' + brokerNames[broker] + '.' : 'Connect ' + brokerNames[broker] + ' to see its ' + tab + '.'}</p>}
+    </section>
+    {settings && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-label="Broker connection">
+      <div className="modal-heading"><h2>{brokerNames[broker]} connection</h2><button aria-label="Close settings" onClick={() => setSettings(false)}>×</button></div>
+      <p>{state?.connected ? 'Connected' : 'Disconnected'} · {state?.credentialsConfigured ? 'API configured' : 'Server API credentials required'}</p>
+      <p>{state?.staticIpConfigured ? 'Server IP configured' : 'Server IP required'} · {state?.liveAllowed ? 'Execution allowed' : 'Execution disabled'}</p>
+      {broker === 'dhan' ? <button disabled={working || !state?.credentialsConfigured || state?.localDemo}
+        onClick={() => action(() => api('/connect', 'POST', {}), 'Dhan connected')}>Connect Dhan API</button>
+        : <div className="connection-form">
+          <button disabled={working || !state?.credentialsConfigured || state?.localDemo} onClick={() => action(async () => {
+            setCallback(''); setKiteUrl((await api('/kite-login', 'POST', {})).url);
+          })}>Generate Kite login</button>
+          {kiteUrl && <>
+            <a href={kiteUrl} target="_blank" rel="noreferrer">Open Kite sign-in ↗</a>
+            <p>After signing in, copy the full redirect URL from that tab and paste it here.</p>
+            <Field label="Kite redirect URL"><input type="password" autoComplete="off" value={callback}
+              onChange={e => setCallback(e.target.value)}/></Field>
+            <button disabled={working || !callback} onClick={() => action(async () => {
+              const url = callback.trim(); setCallback('');
+              await api('/connect', 'POST', { callback: url }); setKiteUrl('');
+            }, 'Zerodha connected')}>Connect Zerodha API</button>
+          </>}
+        </div>}
+      <div className="modal-actions">
+        <button disabled={working || !state?.connected} onClick={() => action(() => api('/disconnect', 'POST', {}), 'Broker disconnected')}>Disconnect</button>
+        <button disabled={working || !state?.marketEnabled} onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Dhan quotes reconnected')}>Reconnect quotes</button>
+      </div>
+      {state?.armed
+        ? <button disabled={working} onClick={() => action(() => api('/arm', 'POST', { armed: false }), 'New orders disabled')}>Disable new orders</button>
+        : <div className="connection-form">
+          <Field label="Type ENABLE LIVE to allow new orders"><input value={ack} onChange={e => setAck(e.target.value)} autoComplete="off"/></Field>
+          <button className="sell" disabled={working || ack !== 'ENABLE LIVE' || !state?.canManage || !state?.marketReady}
+            onClick={() => action(async () => { await api('/arm', 'POST', { ack }); setAck(''); setSettings(false); }, 'New orders enabled')}>Enable new orders</button>
+        </div>}
+      {error && <p role="alert" className="red">{error}</p>}
+    </section></div>}
+  </main>;
+}
+
 createRoot(document.getElementById('root')).render(<App/>);

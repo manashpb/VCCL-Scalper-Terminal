@@ -9,13 +9,13 @@
   introduce paid market-feed, option-chain or chart endpoints there. Preserve
   snapshot acquisition age, exact expiry and missing quotes; no simulation fallback
   when production browser data fails. Live P&L and positions stay broker-sourced.
-- Paper mode is the initial default. An explicit live/paper choice persists in
-  ignored data/trading-mode.json until the user changes it; never expire it or
-  reset it during reconnect. Execution still requires a valid trading connection,
-  configuration and fresh quotes. LOCAL_DEMO bypasses auth for local preview only and
-  cannot enable live execution. No live orders in tests or without user intent.
+- New live orders require explicit arming for the connected broker. Keep Dhan and
+  Zerodha account books separate, and verify exact option metadata against the
+  Kite instrument master before routing a Zerodha order. LOCAL_DEMO only
+  previews quotes and cannot call brokers. No live orders in tests or without
+  user intent.
 - Do not deploy cloud services or change IP whitelists as part of local edits.
-- Keep broker-managed protection separate from paper OCO. Do not introduce
+- Keep Dhan Super Order protection broker-managed. Do not introduce
   blind order retries or infer a successful fill from placement acknowledgment.
 - Run npm run check, npm test and npm run build. Meaningful UI changes also use
   node tests/browser.mjs (headless installed Chrome); inspect screenshots.

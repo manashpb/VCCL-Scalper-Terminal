@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 export const keyOf = i => `${i.exchangeSegment}:${i.securityId}`;
 export const pending = o => ['PENDING', 'TRANSIT', 'PART_TRADED'].includes(o.orderStatus);
 export function totp(secret, now = Date.now()) {
@@ -42,39 +42,4 @@ export function validateOrder(input, instrument, quote, limits = {}) {
   const targetPrice = target ? roundTick(reference + direction * target, instrument.tickSize) : 0;
   if (sl && stopLossPrice <= 0 || target && targetPrice <= 0) throw new Error('Protection price must be positive');
   return { side: input.side, type: input.type, quantity, price, triggerPrice, protection, sl, target, stopLossPrice, targetPrice };
-}
-export class PaperBook {
-  constructor() { this.orders = []; this.positions = new Map(); }
-  place(instrument, order, quote) {
-    const o = { ...order, ...instrument, orderId: randomUUID(), transactionType: order.side, orderType: order.type, orderStatus: 'PENDING', filledQty: 0, productType: 'INTRADAY', createTime: new Date().toISOString() };
-    this.orders.unshift(o); this.tick(instrument, quote); return o;
-  }
-  fill(o, price) {
-    o.orderStatus = 'TRADED'; o.filledQty = o.quantity; o.averageTradedPrice = price;
-    const key = keyOf(o), p = this.positions.get(key) || { ...o, netQty: 0, buyAvg: 0, realizedProfit: 0 };
-    const signed = o.side === 'BUY' ? o.quantity : -o.quantity;
-    if (p.netQty && Math.sign(p.netQty) !== Math.sign(signed)) {
-      p.realizedProfit += Math.min(Math.abs(p.netQty), Math.abs(signed)) * (price - p.buyAvg) * Math.sign(p.netQty);
-      if (Math.abs(signed) > Math.abs(p.netQty)) p.buyAvg = price;
-    } else p.buyAvg = (Math.abs(p.netQty) * p.buyAvg + Math.abs(signed) * price) / (Math.abs(p.netQty) + Math.abs(signed));
-    p.netQty += signed; this.positions.set(key, p);
-    if (o.protection !== 'NONE') {
-      const direction = o.side === 'BUY' ? 1 : -1, group = o.orderId;
-      const exitSide = o.side === 'BUY' ? 'SELL' : 'BUY';
-      const add = (type, exitPrice) => this.orders.unshift({ ...o, orderId: randomUUID(), group, side: exitSide, transactionType: exitSide, type, orderType: type, protection: 'NONE', filledQty: 0, averageTradedPrice: 0, orderStatus: 'PENDING', price: exitPrice });
-      add('STOP_LOSS_MARKET', roundTick(price - direction * o.sl, o.tickSize));
-      if (o.protection === 'BOTH') add('LIMIT', roundTick(price + direction * o.target, o.tickSize));
-    }
-    if (o.group) for (const sibling of this.orders) if (sibling.group === o.group && sibling.orderId !== o.orderId && pending(sibling)) sibling.orderStatus = 'CANCELLED';
-  }
-  tick(i, q) {
-    for (const o of [...this.orders]) {
-      if (keyOf(o) !== keyOf(i) || !pending(o)) continue;
-      const buying = o.side === 'BUY', market = buying ? q.ask || q.ltp : q.bid || q.ltp;
-      if (o.type === 'STOP_LOSS') o.triggered ||= buying ? q.ltp >= o.triggerPrice : q.ltp <= o.triggerPrice;
-      if (o.type === 'MARKET' || o.type === 'LIMIT' && (buying ? market <= o.price : market >= o.price) || o.type === 'STOP_LOSS' && o.triggered && (buying ? market <= o.price : market >= o.price) || o.type === 'STOP_LOSS_MARKET' && (buying ? q.ltp >= o.price : q.ltp <= o.price)) this.fill(o, o.type === 'LIMIT' || o.type === 'STOP_LOSS' ? (buying ? Math.min(market, o.price) : Math.max(market, o.price)) : market);
-    }
-  }
-  cancel(id) { const o = this.orders.find(o => o.orderId === id); if (!o || !pending(o)) throw new Error('Order is no longer pending'); o.orderStatus = 'CANCELLED'; }
-  snapshot(quotes) { return { orders: this.orders, positions: [...this.positions.values()].map(p => ({ ...p, unrealizedProfit: ((quotes.get(keyOf(p))?.ltp || p.buyAvg) - p.buyAvg) * p.netQty })) }; }
 }

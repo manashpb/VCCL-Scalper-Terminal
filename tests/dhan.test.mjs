@@ -26,3 +26,27 @@ test('trading connection never starts data and rejects every paid data path',asy
     assert.equal(paths.length,1);d.disconnect();
   }finally{globalThis.fetch=original;}
 });
+
+test('expired configured token regenerates once and survives same-day restart',async()=>{
+  const {mkdtemp,rm}=await import('node:fs/promises');
+  const {tmpdir}=await import('node:os');
+  const {join}=await import('node:path');
+  const dir=await mkdtemp(join(tmpdir(),'dhan-session-'));
+  const env={DHAN_CLIENT_ID:'test',DHAN_ACCESS_TOKEN:'expired',DHAN_PIN:'123456',DHAN_TOTP_SECRET:'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',DHAN_SESSION_FILE:join(dir,'session.json')};
+  const original=globalThis.fetch;let generated=0;
+  globalThis.fetch=async(url,opts)=>{
+    if(String(url).includes('generateAccessToken')){generated++;return Response.json({accessToken:'fresh',expiryTime:new Date(Date.now()+3600000).toISOString()});}
+    return opts.headers['access-token']==='expired'?Response.json({errorCode:'DH-901'},{status:401}):Response.json({});
+  };
+  try {
+    const first=new Dhan(env);await first.connect();assert.equal(first.connected,true);assert.equal(generated,1);
+    const restarted=new Dhan(env);await restarted.connect({reuseOnly:true});assert.equal(restarted.connected,true);assert.equal(restarted.token,'fresh');assert.equal(generated,1);
+    restarted.day=()=> '1900-01-01';assert.equal(await restarted.saved(),null);
+  } finally {globalThis.fetch=original;await rm(dir,{recursive:true,force:true});}
+});
+
+test('profile network failure does not regenerate or retry authentication',async()=>{
+ const d=new Dhan({DHAN_CLIENT_ID:'test',DHAN_ACCESS_TOKEN:'existing',DHAN_PIN:'123456',DHAN_TOTP_SECRET:'unused'});
+ const original=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('offline');};
+ try {await assert.rejects(d.connect(),/network unavailable/);assert.equal(calls,1);assert.equal(d.connected,false);}finally{globalThis.fetch=original;}
+});

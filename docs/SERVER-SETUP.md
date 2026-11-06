@@ -33,10 +33,26 @@ DHAN_PIN=
 DHAN_TOTP_SECRET=
 ```
 
-A nonempty access token takes precedence over TOTP. Tokens are not persisted or
-renewed in the background. If a generated token expires, restart this service
-and connect again to generate a new token using the configured TOTP credentials.
-For a manual token, replace it in `.env` and restart. Keep the system clock in sync.
+The backend reuses a valid same-day Dhan session. It verifies an access token before use and can fall back to configured PIN/TOTP credentials when the token expires.
+
+## Zerodha Kite Connect
+
+Configure a Kite Connect app for the intended account and add the following to the private server environment.
+
+```dotenv
+ZERODHA_API_KEY=YOUR_KITE_APP_KEY
+ZERODHA_API_SECRET=YOUR_KITE_APP_SECRET
+ZERODHA_USER_ID=YOUR_ZERODHA_CLIENT_ID
+ZERODHA_STATIC_IP=YOUR_BACKEND_OUTBOUND_PUBLIC_IP
+```
+
+In the Kite developer console, register a private callback, such as a browser
+loopback URL on an unused port (`http://127.0.0.1:65534/`). If that port has no
+listener, the browser can show a connection error after sign-in. Copy the full
+URL from its address bar into the Scalper connection dialog promptly. Keep
+callback queries out of access logs and use the URL only in that dialog.
+Register the backend's outbound static IP for Kite order execution. A new Kite
+sign-in is needed after session expiry or service restart.
 
 Keep these server settings as configured during installation:
 
@@ -66,14 +82,11 @@ export PATH="$HOME/.nvm/versions/node/v22.23.4/bin:$PATH"
 pm2 restart scalper-terminal --update-env
 ```
 
-Open the workspace → Scalper Terminal. Browser data starts independently. For
-execution/account books use Dhan connection → Connect trading API. Reconnect
-browser data after fixing service/token errors. Trading disconnect leaves data active. Keep
-`ALLOW_LIVE_TRADING=false` while checking authentication, contracts, market feed
-and paper orders. When ready for real execution, deliberately change that setting
-to `true`, restart this service, and type `ENABLE LIVE` in the terminal's arming
-dialog. Live Only SL is unavailable; use the supported protection modes described
-in the README. No credential value belongs in the browser, repository or chat.
+Open Scalper Terminal from the workspace. With `ALLOW_LIVE_TRADING=false`, verify
+the selected broker's connection and books, and verify Dhan quotes independently.
+For execution, set `ALLOW_LIVE_TRADING=true`, restart the service, then enable new
+orders from the selected broker's connection dialog. The app assumes a single
+owner and keeps the two broker sessions separate.
 
 ## Application updates
 
@@ -89,9 +102,8 @@ pm2 restart scalper-terminal --update-env
 pm2 save
 ```
 
-Review unexpected local changes before pulling. A restart clears the paper book and in-memory access token; broker orders
-continue at Dhan. Live/paper selection persists in ignored `data/trading-mode.json`
-until you explicitly change it. Reconnect the trading API after a restart.
+Review unexpected local changes before pulling. Restarting disables new orders
+and clears the in-memory Kite session. Existing orders remain with each broker.
 
 ## Snapshot limits
 
