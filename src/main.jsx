@@ -284,11 +284,6 @@ function App() {
         <Field label="Expiry"><select value={expiry} onChange={e => { changeContract(); setExpiry(e.target.value); }}>
           {contracts.expiries.map(e => <option key={e}>{e}</option>)}
         </select></Field>
-        <div className="field"><span>Option</span><div className="segmented" aria-label="Option type">
-          {['CE', 'PE'].map(s => <button key={s} aria-pressed={side === s} onClick={() => {
-            if (side !== s) { setPrice(''); setTrigger(''); setEdit(null); setSide(s); }
-          }}>{s}</button>)}
-        </div></div>
         <Field label="ATM offset"><select value={offset} onChange={e => { changeContract(); setOffset(e.target.value); }}>
           {[3, 2, 1, 0, -1, -2, -3].map(n => <option key={n} value={n}>{n ? (n > 0 ? '+' : '') + n : 'ATM'}</option>)}
         </select></Field>
@@ -296,6 +291,11 @@ function App() {
       <div className="quote-row">
         <Field label="Strike"><StrikeDropdown type={side} options={options} value={instrumentKey} spot={spot}
           onChange={value => { setPrice(''); setTrigger(''); setEdit(null); setStrike(previous => ({ ...previous, [side]: value })); }}/></Field>
+        <div className="field"><span>Option</span><div className="segmented" aria-label="Option type">
+          {['CE', 'PE'].map(s => <button key={s} aria-pressed={side === s} onClick={() => {
+            if (side !== s) { setPrice(''); setTrigger(''); setEdit(null); setSide(s); }
+          }}>{s}</button>)}
+        </div></div>
         <span className="price"><small>LTP</small><b>{fresh ? money(quote.ltp) : '—'}</b></span>
         <span><small>Bid / Ask</small><b>{fresh ? money(quote.bid) + ' / ' + money(quote.ask) : '—'}</b></span>
         <span><small>Spot</small><b>{money(spot)}</b></span>
