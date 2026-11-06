@@ -77,7 +77,7 @@ app.post('/scalper/api/market/fyers-connect', route(async (req, res) => {
 }));
 app.post('/scalper/api/market/reconnect', route(async (req, res) => {
   if (localDemo || fyersConnecting) throw new Error('FYERS reconnect is unavailable');
-  if (!market.symbolMap.size) await market.start();
+  if (market.masterError) await market.start();
   market.connectSocket();
   res.json({ ok: true });
 }));

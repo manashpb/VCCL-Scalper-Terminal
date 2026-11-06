@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { parse } from 'csv-parse/sync';
 import { keyOf } from './domain.mjs';
 
@@ -61,6 +62,7 @@ export class FyersMarketData {
     this.error = '';
     this.quotes = new Map();
     this.symbolMap = new Map();
+    this.segmentMaps = new Map();
     this.wanted = new Map();
     this.chains = new Map();
     this.nextChainAt = 0;
@@ -73,19 +75,46 @@ export class FyersMarketData {
     return this.loading;
   }
 
+  async loadSegment(segment, today) {
+    const file = segment.replace('_FNO', '_FO').replace('_EQ', '_CM');
+    const cache = new URL('../data/fyers/' + file + '.csv', import.meta.url);
+    try {
+      if (localDate((await stat(cache)).mtimeMs / 1000) === today) {
+        const mapped = mapFyersSymbols(await readFile(cache, 'utf8'), segment, this.instruments);
+        if (mapped.size) return mapped;
+      }
+    } catch {}
+    const response = await fetch('https://public.fyers.in/sym_details/' + file + '.csv', {
+      redirect: 'error', signal: AbortSignal.timeout(20000)
+    });
+    if (!response.ok) throw new Error('FYERS symbol master unavailable');
+    const csv = await response.text();
+    const mapped = mapFyersSymbols(csv, segment, this.instruments);
+    if (!mapped.size) throw new Error('FYERS symbol master has no matching contracts');
+    try {
+      await mkdir(new URL('../data/fyers/', import.meta.url), { recursive: true });
+      const tmp = new URL(cache.href + '.tmp');
+      await writeFile(tmp, csv);
+      await rename(tmp, cache);
+    } catch {
+      // A cache write failure does not invalidate the freshly downloaded symbols.
+    }
+    return mapped;
+  }
+
   async loadSymbols() {
     try {
       await this.instruments.load();
-      const results = await Promise.allSettled(segments.map(async segment => {
-        const file = segment.replace('_FNO', '_FO').replace('_EQ', '_CM');
-        const response = await fetch('https://public.fyers.in/sym_details/' + file + '.csv', {
-          redirect: 'error', signal: AbortSignal.timeout(20000)
-        });
-        if (!response.ok) throw new Error('FYERS symbol master unavailable');
-        return mapFyersSymbols(await response.text(), segment, this.instruments);
-      }));
-      const symbolMap = new Map(results.flatMap(result => result.status === 'fulfilled' ? [...result.value] : []));
-      if (![...symbolMap.values()].some(row => row.instrument.expiry)) throw new Error('FYERS option symbols unavailable');
+      const today = localDate(Date.now() / 1000);
+      const newDay = this.masterDay !== today;
+      if (newDay) this.segmentMaps.clear();
+      const missing = segments.filter(segment => !this.segmentMaps.has(segment));
+      const results = await Promise.allSettled(missing.map(segment => this.loadSegment(segment, today)));
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'fulfilled') this.segmentMaps.set(missing[index], result.value);
+      }
+      const symbolMap = new Map([...this.segmentMaps.values()].flatMap(map => [...map]));
+      this.masterDay = today;
       const groups = new Map();
       for (const { instrument } of symbolMap.values()) {
         if (!instrument.expiry) continue;
@@ -94,18 +123,25 @@ export class FyersMarketData {
       }
       this.groups = groups;
       this.symbolMap = symbolMap;
-      this.masterDay = localDate(Date.now() / 1000);
-      this.error = '';
-      this.version++;
+      this.spotSymbols = new Set([...symbolMap.values()].filter(row => !row.instrument.expiry).map(row => row.instrument.symbol));
+      const nifty = this.contracts('NIFTY');
+      this.masterError = nifty.spot && nifty.options.length ? ''
+        : 'FYERS contract list incomplete. Retrying the missing symbol files.';
+      if (newDay || results.some(result => result.status === 'fulfilled')) this.version++;
     } catch {
-      this.error = 'Could not load the FYERS contract list. Reconnect quotes to retry.';
-      throw new Error(this.error);
+      this.masterError = 'Could not load the FYERS contract list. Retrying.';
+      throw new Error(this.masterError);
+    } finally {
+      clearTimeout(this.masterRetry);
+      if (this.segmentMaps?.size !== segments.length) {
+        this.masterRetry = setTimeout(() => { void this.start().catch(() => {}); }, 30000).unref();
+      }
     }
   }
 
   symbols() {
     if (this.instruments.demo) return [];
-    return this.instruments.symbols().filter(symbol => this.groups?.has(symbol));
+    return this.instruments.symbols().filter(symbol => this.groups?.has(symbol) && this.spotSymbols.has(symbol));
   }
 
   contracts(symbol, expiry = '') {
@@ -125,7 +161,7 @@ export class FyersMarketData {
   }
 
   async connect(code) {
-    if (this.masterDay !== localDate(Date.now() / 1000)) await this.start();
+    if (this.masterDay !== localDate(Date.now() / 1000) || this.masterError) await this.start();
     const appIdHash = createHash('sha256').update(this.appId + ':' + this.secret).digest('hex');
     const response = await fetch(apiBase + '/api/v3/validate-authcode', {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(12000),
@@ -293,6 +329,7 @@ export class FyersMarketData {
 
   stop() {
     clearTimeout(this.expiryTimer);
+    clearTimeout(this.masterRetry);
     this.stopSocket();
     this.authorization = '';
     this.status = 'Connect FYERS market data';

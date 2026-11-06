@@ -37,7 +37,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
       staticIpConfigured: b.staticIp, canManage,
       liveReady: canManage && market.ready && !instruments.demo && Date.now() - b.bookAt < 10000,
       feed: market.status, marketReady: market.ready, marketVersion: market.version,
-      marketEnabled: market.enabled, marketConfigured: market.configured, marketError: market.error, bookError: b.bookError,
+      marketEnabled: market.enabled, marketConfigured: market.configured, marketError: market.masterError || market.error, bookError: b.bookError,
       bookAt: b.bookAt, instrumentDemo: instruments.demo, localDemo
     };
   }

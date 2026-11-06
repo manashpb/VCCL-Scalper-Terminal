@@ -81,3 +81,31 @@ test('FYERS option-chain request budget is shared across symbols and backs off o
   await market.refreshGreeks(optionRow);
   assert.equal(api.mock.callCount(), 2);
 });
+
+test('a missing FYERS spot master is retried without reloading successful segments', async () => {
+  const market = new FyersMarketData({
+    ...instruments, load: async () => {}, symbols: () => ['NIFTY'],
+    contracts: () => ({ spot, options: [option], expiries: [option.expiry] })
+  }, {});
+  const calls = [];
+  market.loadSegment = async segment => {
+    calls.push(segment);
+    if (segment === 'NSE_EQ' && calls.filter(value => value === segment).length === 1) {
+      throw new Error('Temporary download failure');
+    }
+    if (segment === 'NSE_FNO') return new Map([[optionRow.key, optionRow]]);
+    if (segment === 'NSE_EQ') return new Map([[spotRow.key, spotRow]]);
+    return new Map();
+  };
+  try {
+    await market.start();
+    assert.deepEqual(market.symbols(), []);
+    assert.match(market.masterError, /incomplete/);
+    await market.start();
+    assert.deepEqual(market.symbols(), ['NIFTY']);
+    assert.equal(market.contracts('NIFTY').spot, spot);
+    assert.equal(market.masterError, '');
+    assert.equal(calls.filter(segment => segment === 'NSE_FNO').length, 1);
+    assert.equal(calls.filter(segment => segment === 'NSE_EQ').length, 2);
+  } finally { market.stop(); }
+});
