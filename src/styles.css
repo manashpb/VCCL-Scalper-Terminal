@@ -57,7 +57,8 @@ small, .muted { color: #9bacc2; }
 .segmented button[aria-pressed="true"] { background: #20443c; border-color: #528879; color: #9af0d9; }
 .fair-inputs { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) repeat(2, minmax(0, 1fr)); }
 .order-fields { grid-template-columns: repeat(auto-fit, minmax(57px, 1fr)); }
-.trade-row { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.trade-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.close-actions { display: grid; gap: 5px; }
 .buy { background: #175740; border-color: #397f66; color: #d1ffeb; }
 .sell { background: #6a2636; border-color: #ab5062; color: #ffdde3; }
 .extras label { display: flex; align-items: center; gap: 3px; }
@@ -71,7 +72,6 @@ small, .muted { color: #9bacc2; }
 .fair-results small { display: block; }
 .book-tools { padding: 5px; flex-wrap: wrap; }
 .position-strip { display: grid; gap: 3px; border-top: 1px solid #28384a; padding: 4px 6px; }
-.position-strip > div { display: flex; justify-content: space-between; align-items: center; gap: 4px; flex-wrap: wrap; }
 .table-scroll { overflow: auto; max-height: clamp(85px, 32dvh, 420px); }
 table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 4px 6px; border-top: 1px solid #263449; }

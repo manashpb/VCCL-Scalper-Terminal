@@ -321,6 +321,14 @@ function App() {
       <div className="trade-row">
         <button className="buy" disabled={!ready} onClick={() => sendOrder('BUY')}>Buy {side} · {orderLabel}</button>
         <button className="sell" disabled={!ready} onClick={() => sendOrder('SELL')}>Sell {side} · {orderLabel}</button>
+        <div className="close-actions">
+          {selectedPositions.length ? selectedPositions.map(p =>
+            <button key={p.productType} disabled={!canManage || !fresh || !closeSupported(p)}
+              onClick={() => closePosition(p)}>
+              Close {selectedPositions.length > 1 ? p.productType : 'position'}
+            </button>
+          ) : <button disabled title="No open position for the selected contract">Close position</button>}
+        </div>
       </div>
       <div className="extras">
         <label><input type="checkbox" checked={shortcuts} disabled={!state?.liveReady} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
@@ -346,8 +354,8 @@ function App() {
         }>Cancel pending</button>
       </div>
       {selectedPositions.length ? <div className="position-strip">{selectedPositions.map(p =>
-        <div key={p.productType}><span>{p.productType} · {p.netQty} units · P&L {money(p.unrealizedProfit)}</span>
-          <button disabled={!canManage || !fresh || !closeSupported(p)} onClick={() => closePosition(p)}>Close selected</button></div>)}</div> : null}
+        <span key={p.productType}>{p.productType} · {p.netQty} units · P&L {money(p.unrealizedProfit)}</span>
+      )}</div> : null}
       {book.length ? <div className="table-scroll" tabIndex={0} aria-label={tab === 'orders' ? 'Order book' : 'Positions'}>
         <table><thead><tr><th>Contract</th>{tab === 'orders'
           ? <><th>Order</th><th>Fill / Qty</th><th>Limit / SL</th><th>Status</th><th>Actions</th></>

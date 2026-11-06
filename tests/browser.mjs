@@ -14,6 +14,8 @@ try{
   const buy = page.getByRole('button', {name: 'Buy CE · Market', exact: true});
   await buy.waitFor();
   assert.equal(await buy.isDisabled(), true);
+  const closePosition = page.getByRole('button', {name: 'Close position', exact: true});
+  assert.equal(await closePosition.isDisabled(), true);
   await page.waitForFunction(() => document.querySelector('.price b').textContent !== '—');
   assert.equal(await page.getByRole('combobox', {name: 'PE strike', exact: true}).count(), 0);
   await page.getByRole('button', {name: 'PE', exact: true}).click();
@@ -113,7 +115,9 @@ try{
   });
   await page.route('**/scalper/api/close', async route => {
     assert.equal(route.request().headers()['x-scalper-broker'], 'zerodha');
-    assert.equal(route.request().postDataJSON().product, 'NRML');
+    assert.deepEqual(route.request().postDataJSON(), {
+      key: contract.exchangeSegment + ':' + contract.securityId, product: 'NRML', netQty: contract.lotSize
+    });
     calls.push('CLOSE');
     await route.fulfill({json:{ok:true}});
   });
@@ -131,7 +135,7 @@ try{
   await page.getByRole('button', {name: 'Positions · 1', exact: true}).click();
   await page.screenshot({path:fileURLToPath(new URL('../test-results/scalper-positions-320.png',import.meta.url)),fullPage:true});
 
-  await page.getByRole('button', {name: 'Close selected', exact: true}).click();
+  await page.locator('.trade-row').getByRole('button', {name: 'Close position', exact: true}).click();
   await page.getByText('Close order submitted. Check the order book.', {exact: true}).waitFor();
   await page.route('**/scalper/api/cancel-pending', async route => {
     assert.equal(route.request().method(), 'POST');
