@@ -14,7 +14,7 @@ Both brokers use the FNO Analyzer's existing Dhan browser-token bridge for price
 
 Follow [server setup](docs/SERVER-SETUP.md) for private credentials and IP whitelisting. Select the broker next to **Connection**. For Dhan, click **Connect Dhan API** to use its configured token or TOTP login. For Zerodha, generate and open a Kite login, then paste its full redirect URL into the connection dialog. The backend verifies the login state and account before exchanging the request token.
 
-New entries and edits require enabling new orders for the connected broker with `ENABLE LIVE`. Reconnecting and restarting clear that permission. A connected broker can still manage eligible existing positions and pending orders when new orders are disabled, provided server execution is enabled.
+Live execution is ready when the broker is connected, the server IP is configured, and quotes and broker books are current. Set `ALLOW_LIVE_TRADING=false` on the server for read-only use.
 
 Close checks the current broker position size, product and pending orders, then submits an opposite market order using the same product. Manage protected orders in the broker. Review the order book after any timeout because the broker may have received the request.
 

@@ -37,7 +37,7 @@ try{
   await page.getByRole('button', {name: 'Connection', exact: true}).click();
   await page.getByRole('dialog', {name: 'Broker connection'}).waitFor();
   assert.ok(await page.getByRole('button', {name: 'Generate Kite login'}).isDisabled());
-  assert.ok(await page.getByRole('button', {name: 'Enable new orders'}).isDisabled());
+  assert.equal(await page.getByText('ENABLE LIVE', {exact: false}).count(), 0);
   await page.getByRole('button', {name: 'Close settings'}).click();
   await page.getByLabel('Trading broker').selectOption('dhan');
   await page.getByRole('region', {name: 'Dhan account'}).getByText('Connect Dhan to see its positions.').waitFor();
@@ -82,7 +82,7 @@ try{
       orderStatus: 'PENDING', quantity: contract.lotSize, transactionType: 'BUY', price: 100
     }];
     const positions = [{ ...contract, productType: 'NRML', netQty: contract.lotSize, unrealizedProfit: 24 }];
-    await route.fulfill({json:{...original, connected:true, canManage:true, liveReady:true, armed:true, orders, positions}});
+    await route.fulfill({json:{...original, connected:true, canManage:true, liveReady:true, orders, positions}});
   });
   await page.route('**/scalper/api/orders/test-order', async route => {
     assert.equal(route.request().headers()['x-scalper-broker'], 'zerodha');

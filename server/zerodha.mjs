@@ -37,7 +37,8 @@ export class Zerodha {
 
   async fetch(path, method = 'GET', fields) {
     const headers = { 'X-Kite-Version': '3' };
-    if (this.token) headers.Authorization = `token ${this.apiKey}:${this.token}`;
+    const token = this.token;
+    if (token) headers.Authorization = `token ${this.apiKey}:${token}`;
     let response;
     try {
       response = await fetch(`https://api.kite.trade${path}`, {
@@ -53,8 +54,8 @@ export class Zerodha {
     if (response.ok && path === '/instruments') return response.text();
     const json = await response.json().catch(() => null);
     if (!response.ok || json?.status !== 'success') {
-      const auth = response.status === 401 || json?.error_type === 'TokenException';
-      if (auth) this.disconnect();
+      const auth = json?.error_type === 'TokenException';
+      if (auth && token === this.token) this.disconnect();
       throw Object.assign(new Error(auth ? 'Zerodha session expired. Sign in to Kite again.'
         : `Zerodha request failed (${response.status}${/^[A-Za-z]+Exception$/.test(json?.error_type) ? `, ${json.error_type}` : ''})`),
         { rejected: [400, 401, 403, 422].includes(response.status) && json?.status === 'error' });
@@ -74,7 +75,6 @@ export class Zerodha {
         throw new Error('Kite signed in to a different account than the one configured for this terminal');
       }
       this.token = session.access_token;
-      await this.loadInstruments();
       this.connected = true;
     } catch (error) {
       this.disconnect();

@@ -41,6 +41,20 @@ test('Kite resolves exchange token and exact option metadata before placing or m
   assert.equal(placed[0].market_protection, -1);
 });
 
+test('Kite retains its token during gateway failures and drops it on broker rejection', async t => {
+  const broker = new Zerodha(instruments, { ZERODHA_API_KEY: 'key' });
+  broker.token = 'test';
+  broker.connected = true;
+  const gateway = new Response('Gateway unavailable', { status: 401 });
+  const expired = Response.json({ status: 'error', error_type: 'TokenException' }, { status: 403 });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => gateway);
+  await assert.rejects(broker.fetch('/orders'), /request failed/);
+  assert.equal(broker.connected, true);
+  fetchMock.mock.mockImplementation(async () => expired);
+  await assert.rejects(broker.fetch('/orders'), /session expired/);
+  assert.equal(broker.connected, false);
+});
+
 test('broker mutations cannot cross account books and position close preserves the product', async () => {
   const app = express();
   app.use(express.json());
@@ -54,15 +68,22 @@ test('broker mutations cannot cross account books and position close preserves t
       if (method === 'DELETE') { operations.push(['dhan', 'cancel']); return; }
       return path === '/orders' ? [regular] : [];
     } };
+  let firstKiteBook = true;
   const zerodha = { configured: true, connected: false, loginUrl: state => 'https://kite.example/?state=' + state,
     connect: async () => { zerodha.connected = true; },
-    readBook: async () => ({ orders: [], superOrders: [], positions: [{ ...contract, productType: 'NRML', netQty: -65 }] }),
+    readBook: async () => {
+      if (firstKiteBook) {
+        firstKiteBook = false;
+        throw new Error('Temporary Kite book failure');
+      }
+      return { orders: [], superOrders: [], positions: [{ ...contract, productType: 'NRML', netQty: -65 }] };
+    },
     contractFor: () => contract,
     place: async (_, order) => { operations.push(['zerodha', order.side, order.productType, order.quantity]); return { orderId: 'close' }; }
   };
   const market = { ready: true, enabled: true };
   installTrading({ app, route, localDemo: false, csrf: 'test', dhan, zerodha, instruments, market,
-    env: { NODE_ENV: 'test', ALLOW_LIVE_TRADING: 'true', DHAN_STATIC_IP: 'set', ZERODHA_STATIC_IP: 'set' },
+    env: { NODE_ENV: 'test', DHAN_STATIC_IP: 'set', ZERODHA_STATIC_IP: 'set' },
     quotes: () => new Map([[key, { ltp: 100, receivedAt: Date.now() }]]) });
   app.use((error, req, res, next) => res.status(400).json({ error: error.message }));
   const server = app.listen(0, '127.0.0.1');
@@ -75,12 +96,19 @@ test('broker mutations cannot cross account books and position close preserves t
     return { status: response.status, data: await response.json() };
   }
   try {
-    assert.equal((await call('dhan', '/connect', 'POST')).status, 200);
+    const dhanConnection = await call('dhan', '/connect', 'POST');
+    assert.equal(dhanConnection.status, 200);
+    assert.equal(dhanConnection.data.liveReady, true);
     const login = await call('zerodha', '/kite-login', 'POST');
     const callback = login.data.url + '&request_token=testrequesttoken';
     assert.equal((await call('zerodha', '/connect', 'POST', { callback }, 'session=other')).status, 400);
-    assert.equal((await call('zerodha', '/connect', 'POST', { callback })).status, 200);
+    const kiteConnection = await call('zerodha', '/connect', 'POST', { callback });
+    assert.equal(kiteConnection.status, 200);
+    assert.equal(kiteConnection.data.connected, true);
+    assert.equal(kiteConnection.data.liveReady, false);
+    assert.match(kiteConnection.data.bookError, /Temporary Kite book failure/);
     assert.equal((await call('zerodha', '/orders/shared-id', 'DELETE')).status, 400);
+    assert.equal((await call('zerodha', '/state')).data.liveReady, true);
     assert.equal((await call('dhan', '/orders/shared-id', 'DELETE')).status, 200);
     assert.equal((await call('zerodha', '/close', 'POST', { key, product: 'NRML', netQty: -130 })).status, 400);
     assert.equal((await call('zerodha', '/close', 'POST', { key, product: 'NRML', netQty: -65 })).status, 200);

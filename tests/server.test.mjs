@@ -34,11 +34,11 @@ test('local preview isolates broker state and cannot execute any orders', () => 
   assert.equal(kite.liveReady, false);
   const invalid = await call('/state', 'GET', { ...headers, 'X-Scalper-Broker': 'constructor' });
   assert.equal(invalid.status, 400);
-  const wrongOrigin = await call('/arm', 'POST', { ...headers, Origin: 'https://evil.example' });
+  const wrongOrigin = await call('/connect', 'POST', { ...headers, Origin: 'https://evil.example' });
   const wrongCsrf = await call('/orders', 'POST', { ...headers, 'X-CSRF-Token': 'bad' });
   assert.match((await wrongOrigin.json()).error, /origin/);
   assert.match((await wrongCsrf.json()).error, /request token/);
-  for (const path of ['/connect', '/kite-login', '/orders', '/close', '/cancel-pending', '/arm']) {
+  for (const path of ['/connect', '/kite-login', '/orders', '/close', '/cancel-pending']) {
     const result = await call(path, 'POST');
     assert.equal(result.status, 403);
     assert.match((await result.json()).error, /local preview/);

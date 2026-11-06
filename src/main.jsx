@@ -64,7 +64,7 @@ function App() {
   const [basis, setBasis] = useState('LIMIT'), [price, setPrice] = useState(''), [trigger, setTrigger] = useState(''), [gap, setGap] = useState('1');
   const [protect, setProtect] = useState(false), [sl, setSl] = useState('10'), [target, setTarget] = useState('20');
   const [shortcuts, setShortcuts] = useState(false), [tab, setTab] = useState('orders');
-  const [settings, setSettings] = useState(false), [ack, setAck] = useState('');
+  const [settings, setSettings] = useState(false);
   const [kiteUrl, setKiteUrl] = useState(''), [callback, setCallback] = useState('');
   const [edit, setEdit] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState('');
   const [working, setWorking] = useState(false), [now, setNow] = useState(Date.now());
@@ -158,7 +158,7 @@ function App() {
   function changeBroker(value) {
     activeBroker.current = value;
     localStorage.setItem('scalper-broker', value);
-    setBroker(value); setState(null); setEdit(null); setAck(''); setKiteUrl(''); setCallback('');
+    setBroker(value); setState(null); setEdit(null); setKiteUrl(''); setCallback('');
     setProtect(false); setShortcuts(false); setError(''); setMessage('');
   }
   function changeContract() {
@@ -282,10 +282,10 @@ function App() {
         <button className="sell" disabled={!ready} onClick={() => sendOrder('SELL')}>Sell {side} · {orderLabel}</button>
       </div>
       <div className="extras">
-        <label><input type="checkbox" checked={shortcuts} disabled={!state?.armed} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
+        <label><input type="checkbox" checked={shortcuts} disabled={!state?.liveReady} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
         {broker === 'dhan' && type !== 'STOP_LOSS' &&
           <label><input type="checkbox" checked={protect} onChange={e => setProtect(e.target.checked)}/> Dhan SL + target</label>}
-        <span>{state?.armed ? 'Orders enabled' : 'New orders off'}</span>
+        <span>{state?.liveReady ? 'Live orders ready' : 'Live orders unavailable'}</span>
       </div>
       {protection === 'BOTH' && <div className="order-fields">
         <NumberField label="Premium SL pts" value={sl} change={setSl}/>
@@ -368,14 +368,7 @@ function App() {
         <button disabled={working || !state?.connected} onClick={() => action(() => api('/disconnect', 'POST', {}), 'Broker disconnected')}>Disconnect</button>
         <button disabled={working || !state?.marketEnabled} onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Dhan quotes reconnected')}>Reconnect quotes</button>
       </div>
-      {state?.armed
-        ? <button disabled={working} onClick={() => action(() => api('/arm', 'POST', { armed: false }), 'New orders disabled')}>Disable new orders</button>
-        : <div className="connection-form">
-          <Field label="Type ENABLE LIVE to allow new orders"><input value={ack} onChange={e => setAck(e.target.value)} autoComplete="off"/></Field>
-          <button className="sell" disabled={working || ack !== 'ENABLE LIVE' || !state?.canManage || !state?.marketReady}
-            onClick={() => action(async () => { await api('/arm', 'POST', { ack }); setAck(''); setSettings(false); }, 'New orders enabled')}>Enable new orders</button>
-        </div>}
-      {error && <p role="alert" className="red">{error}</p>}
+      {(error || state?.bookError) && <p role="alert" className="red">{error || state.bookError}</p>}
     </section></div>}
   </main>;
 }

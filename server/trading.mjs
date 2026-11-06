@@ -4,7 +4,7 @@ import { keyOf, pending, validateOrder } from './domain.mjs';
 const emptyBook = () => ({ orders: [], positions: [], superOrders: [] });
 const broker = (adapter, configured, staticIp) => ({
   adapter, configured, staticIp: !!staticIp, book: emptyBook(), bookAt: 0, bookError: '',
-  busy: false, armed: false, lastConnect: 0, requests: new Map(), closes: new Map()
+  busy: false, lastConnect: 0, requests: new Map(), closes: new Map()
 });
 const positionId = p => keyOf(p) + '|' + p.productType;
 const terminalTag = id => 'SCT' + id.replaceAll('-', '').slice(0, 17);
@@ -12,7 +12,6 @@ const terminalTag = id => 'SCT' + id.replaceAll('-', '').slice(0, 17);
 function clearBook(b) {
   b.book = emptyBook();
   b.bookAt = 0;
-  b.armed = false;
 }
 
 export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha, instruments, market, quotes }) {
@@ -20,7 +19,7 @@ export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha
     dhan: broker(dhan, !!env.DHAN_CLIENT_ID && !!(env.DHAN_ACCESS_TOKEN || env.DHAN_PIN && env.DHAN_TOTP_SECRET), env.DHAN_STATIC_IP),
     zerodha: broker(zerodha, zerodha.configured, env.ZERODHA_STATIC_IP)
   };
-  const liveAllowed = env.ALLOW_LIVE_TRADING === 'true' && !localDemo;
+  const liveAllowed = !localDemo && (env.ALLOW_LIVE_TRADING ?? 'true') === 'true';
   const limits = { maxQuantity: Number(env.MAX_ORDER_QUANTITY || 5000), maxNotional: Number(env.MAX_ORDER_NOTIONAL || 500000) };
   const logins = new Map();
   const owner = req => createHash('sha256').update(req.headers.cookie || '').digest('hex');
@@ -36,8 +35,8 @@ export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha
     const canManage = liveAllowed && b.staticIp && connected && !b.bookError && !!b.bookAt;
     return {
       broker: name, csrf, connected, liveAllowed, credentialsConfigured: b.configured,
-      staticIpConfigured: b.staticIp, armed: b.armed, canManage,
-      liveReady: canManage && b.armed && market.ready && !instruments.demo && Date.now() - b.bookAt < 10000,
+      staticIpConfigured: b.staticIp, canManage,
+      liveReady: canManage && market.ready && !instruments.demo && Date.now() - b.bookAt < 10000,
       feed: market.status, marketReady: market.ready, marketVersion: market.version,
       marketEnabled: market.enabled, marketError: market.error, bookError: b.bookError,
       bookAt: b.bookAt, instrumentDemo: instruments.demo, localDemo
@@ -108,7 +107,7 @@ export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha
   }
   function requireNewOrders(b, name) {
     assertTrading(b);
-    if (!status(name).liveReady) throw new Error('Enable new orders and wait for current data and broker books');
+    if (!status(name).liveReady) throw new Error('Wait for current market data and broker books');
   }
   const regular = (b, o) => b.adapter === zerodha
     ? o.variety === 'regular' && !o.parentOrderId
@@ -154,7 +153,7 @@ export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha
     try {
       await b.adapter.connect(token || undefined);
       await syncBook(b);
-      if (b.bookError) throw new Error(b.bookError);
+      if (!b.adapter.connected) throw new Error(b.bookError || 'Broker disconnected');
     } catch (error) {
       b.adapter.disconnect();
       clearBook(b);
@@ -169,17 +168,6 @@ export function installTrading({ app, route, env, localDemo, csrf, dhan, zerodha
     clearBook(b);
     res.json(status(name));
   });
-  mutation('post', '/arm', async (req, res, b, name) => {
-    if (req.body.armed === false) b.armed = false;
-    else {
-      if (req.body.ack !== 'ENABLE LIVE') throw new Error('Type ENABLE LIVE to enable new real orders');
-      if (!market.ready || instruments.demo) throw new Error('Live Dhan browser data is unavailable');
-      await requireBook(b);
-      b.armed = true;
-    }
-    res.json(status(name));
-  });
-
   mutation('post', '/orders', async (req, res, b, name) => {
     requireNewOrders(b, name);
     const id = String(req.body.requestId || '');

@@ -63,7 +63,7 @@ PORTAL_VERIFY_URL=http://127.0.0.1:5001/verify
 FNO_MARKETDATA_URL=http://127.0.0.1:8001
 LOCAL_DEMO=false
 DHAN_STATIC_IP=YOUR_BACKEND_OUTBOUND_PUBLIC_IP
-ALLOW_LIVE_TRADING=false
+ALLOW_LIVE_TRADING=true
 MAX_ORDER_QUANTITY=5000
 MAX_ORDER_NOTIONAL=500000
 ```
@@ -84,8 +84,8 @@ pm2 restart scalper-terminal --update-env
 
 Open Scalper Terminal from the workspace. With `ALLOW_LIVE_TRADING=false`, verify
 the selected broker's connection and books, and verify Dhan quotes independently.
-For execution, set `ALLOW_LIVE_TRADING=true`, restart the service, then enable new
-orders from the selected broker's connection dialog. The app assumes a single
+Live execution is enabled by default once the broker and data are ready.
+Set `ALLOW_LIVE_TRADING=false` for read-only use. The app assumes a single
 owner and keeps the two broker sessions separate.
 
 ## Application updates
@@ -102,8 +102,7 @@ pm2 restart scalper-terminal --update-env
 pm2 save
 ```
 
-Review unexpected local changes before pulling. Restarting disables new orders
-and clears the in-memory Kite session. Existing orders remain with each broker.
+Review unexpected local changes before pulling. Restarting clears the in-memory Kite session. Existing orders remain with each broker.
 
 ## Snapshot limits
 
