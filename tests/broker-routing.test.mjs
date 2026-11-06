@@ -74,6 +74,20 @@ test('Kite retries a failed DNS lookup for reads without repeating order submiss
   assert.equal(broker.connected, true);
 });
 
+test('Kite retries sign-in before connecting but never repeats an ambiguous token exchange', async t => {
+  const broker = new Zerodha(instruments, { ZERODHA_API_KEY: 'key' });
+  const dnsFailure = new TypeError('fetch failed', { cause: { code: 'EAI_AGAIN' } });
+  const socketFailure = new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => { throw socketFailure; });
+  fetchMock.mock.mockImplementationOnce(async () => { throw dnsFailure; }, 0);
+  fetchMock.mock.mockImplementationOnce(async () => Response.json({ status: 'success', data: { access_token: 'test' } }), 1);
+  const exchange = () => broker.fetch('/session/token', 'POST', { request_token: 'test' });
+  assert.deepEqual(await exchange(), { access_token: 'test' });
+  assert.equal(fetchMock.mock.callCount(), 2);
+  await assert.rejects(exchange(), /could not complete Kite sign-in/);
+  assert.equal(fetchMock.mock.callCount(), 3);
+});
+
 test('broker mutations cannot cross account books and position close preserves the product', async () => {
   const app = express();
   app.use(express.json());

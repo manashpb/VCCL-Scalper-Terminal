@@ -6,6 +6,7 @@ import { keyOf } from './domain.mjs';
 const kiteExchange = { NSE_FNO: 'NFO', BSE_FNO: 'BFO' };
 const orderType = { SL: 'STOP_LOSS', 'SL-M': 'STOP_LOSS_MARKET' };
 const transientConnectionErrors = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET']);
+const preConnectErrors = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
 const day = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 
 export function matchContract(instrument, row) {
@@ -48,12 +49,21 @@ export class Zerodha {
         method, headers, redirect: 'error', signal: AbortSignal.timeout(12000),
         body: fields ? new URLSearchParams(fields) : undefined
       };
-      try {
-        response = await fetch(url, options);
-      } catch (error) {
-        if (method !== 'GET' || options.signal.aborted || !transientConnectionErrors.has(error.cause?.code)) throw error;
-        await delay(250, undefined, { signal: options.signal });
-        response = await fetch(url, options);
+      const sessionExchange = method === 'POST' && path === '/session/token';
+      const attempts = sessionExchange ? 3 : method === 'GET' ? 2 : 1;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          response = await fetch(url, options);
+          break;
+        } catch (error) {
+          const cause = error.cause;
+          // Kite request tokens are single-use. Only retry if no connection was made.
+          const retryable = sessionExchange
+            ? preConnectErrors.has(cause?.code) || (cause?.code === 'ETIMEDOUT' && cause.syscall === 'connect')
+            : transientConnectionErrors.has(cause?.code);
+          if (!retryable || options.signal.aborted || attempt >= attempts) throw error;
+          await delay(250 * attempt, undefined, { signal: options.signal });
+        }
       }
     } catch {
       const orderMutation = method !== 'GET' && path.startsWith('/orders/');
@@ -61,7 +71,9 @@ export class Zerodha {
         ? 'Zerodha response unavailable. Reconcile the order book before retrying.'
         : method === 'GET' && token
           ? 'Kite session retained. Zerodha account data is temporarily unavailable and will refresh automatically.'
-          : 'Zerodha API unavailable');
+          : path === '/session/token'
+            ? 'VCCL could not complete Kite sign-in. Start a new Kite login and paste the new callback URL.'
+            : 'Zerodha API unavailable');
     }
     if (response.ok && path === '/instruments') return response.text();
     const json = await response.json().catch(() => null);
