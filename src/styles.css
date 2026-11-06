@@ -55,7 +55,7 @@ small, .muted { color: #9bacc2; }
 .contract-status > span:first-child { overflow-wrap: anywhere; }
 .segmented { display: flex; gap: 2px; }
 .segmented button[aria-pressed="true"] { background: #20443c; border-color: #528879; color: #9af0d9; }
-.order-fields, .fair-inputs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.fair-inputs { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) repeat(2, minmax(0, 1fr)); }
 .order-fields { grid-template-columns: repeat(auto-fit, minmax(57px, 1fr)); }
 .trade-row { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .buy { background: #175740; border-color: #397f66; color: #d1ffeb; }
