@@ -97,7 +97,11 @@ try{
     await route.fulfill({json:{ok:true}});
   });
   await page.getByRole('button', {name: 'Orders · 1', exact: true}).click();
-  await page.getByRole('button', {name: 'Edit', exact: true}).click();
+  const orderRow = page.getByRole('row').filter({hasText: 'PENDING'});
+  await orderRow.dblclick();
+  await page.getByRole('button', {name: 'Discard', exact: true}).click();
+  await orderRow.focus();
+  await page.keyboard.press('Enter');
   await page.getByLabel('Limit price', {exact: true}).fill('101');
   await page.getByRole('button', {name: 'Save', exact: true}).click();
   await page.getByText('Modification requested', {exact: true}).waitFor();
@@ -105,10 +109,17 @@ try{
   await page.getByText('Cancellation requested', {exact: true}).waitFor();
   await page.getByRole('button', {name: 'Positions · 1', exact: true}).click();
   await page.screenshot({path:fileURLToPath(new URL('../test-results/scalper-positions-320.png',import.meta.url)),fullPage:true});
-  page.once('dialog', dialog => dialog.accept());
+
   await page.getByRole('button', {name: 'Close selected', exact: true}).click();
   await page.getByText('Close order submitted. Check the order book.', {exact: true}).waitFor();
-  assert.deepEqual(calls, ['PUT', 'DELETE', 'CLOSE']);
+  await page.route('**/scalper/api/cancel-pending', async route => {
+    assert.equal(route.request().method(), 'POST');
+    calls.push('CANCEL_PENDING');
+    await route.fulfill({json:{ok:true}});
+  });
+  await page.getByRole('button', {name: 'Cancel pending', exact: true}).click();
+  await page.getByText('Pending order cancellation processed', {exact: true}).waitFor();
+  assert.deepEqual(calls, ['PUT', 'DELETE', 'CLOSE', 'CANCEL_PENDING']);
   const fair=await browser.newPage();
   const frontend=new URL('../../FNO-Analyzer/frontend/',import.meta.url);
   const html=(await readFile(new URL('index.html',frontend),'utf8')).replace(/<script[^>]*>[\s\S]*?<\/script>/g,'').replace(/<link[^>]+>/g,'');

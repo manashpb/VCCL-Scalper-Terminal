@@ -203,10 +203,8 @@ function App() {
   const regular = o => broker === 'zerodha' ? o.variety === 'regular' && !o.parentOrderId :
     !state?.superOrders?.some(s => s.orderId === o.orderId || s.legDetails?.some(l => l.orderId === o.orderId));
   function closePosition(p) {
-    if (window.confirm('Close ' + Math.abs(p.netQty) + ' units of ' + p.tradingSymbol + ' (' + p.productType + ') at ' + brokerNames[broker] + '?')) {
-      action(() => api('/close', 'POST', { key: key(p), product: p.productType, netQty: Number(p.netQty) }),
-        'Close order submitted. Check the order book.');
-    }
+    action(() => api('/close', 'POST', { key: key(p), product: p.productType, netQty: Number(p.netQty) }),
+      'Close order submitted. Check the order book.');
   }
   function saveEdit() {
     const { id, quantity, price, triggerPrice } = edit;
@@ -300,11 +298,9 @@ function App() {
           <button aria-pressed={tab === 'orders'} onClick={() => setTab('orders')}>Orders · {orders.length}</button>
           <button aria-pressed={tab === 'positions'} onClick={() => setTab('positions')}>Positions · {positions.length}</button>
         </div>
-        <button disabled={!canManage} onClick={() => {
-          if (window.confirm('Cancel terminal-created regular pending orders at ' + brokerNames[broker] + '?')) {
-            action(() => api('/cancel-pending', 'POST', {}), 'Pending order cancellation processed');
-          }
-        }}>Cancel pending</button>
+        <button disabled={!canManage} onClick={() =>
+          action(() => api('/cancel-pending', 'POST', {}), 'Pending order cancellation processed')
+        }>Cancel pending</button>
       </div>
       {selectedPositions.length ? <div className="position-strip">{selectedPositions.map(p =>
         <div key={p.productType}><span>{p.productType} · {p.netQty} units · P&L {money(p.unrealizedProfit)}</span>
@@ -315,7 +311,16 @@ function App() {
           : <><th>Qty</th><th>Buy / Sell avg</th><th>Realized</th><th>Unrealized</th></>}</tr></thead>
           <tbody>{book.map(row => {
             const editing = tab === 'orders' && edit?.id === row.orderId && pending(row);
-            return <tr key={tab === 'orders' ? row.orderId : key(row) + row.productType}>
+            const editable = tab === 'orders' && !editing && pending(row) && regular(row) &&
+              state?.liveReady && fresh && key(row) === instrumentKey && !working &&
+              ['MARKET', 'LIMIT', 'STOP_LOSS'].includes(row.orderType);
+            const startEdit = () => setEdit({
+              id: row.orderId, quantity: row.quantity, price: row.price, triggerPrice: row.triggerPrice || 0
+            });
+            return <tr key={tab === 'orders' ? row.orderId : key(row) + row.productType}
+              tabIndex={editable ? 0 : undefined} title={editable ? 'Double-click or press Enter to edit' : undefined}
+              onDoubleClick={editable ? e => { if (!e.target.closest('button, input')) startEdit(); } : undefined}
+              onKeyDown={editable ? e => { if (e.key === 'Enter' && e.target === e.currentTarget) startEdit(); } : undefined}>
               <td><strong>{row.tradingSymbol || row.securityId}</strong><small>{row.productType}</small></td>
               {tab === 'orders' ? <>
                 <td>{row.transactionType}<small>{row.orderType}</small></td>
@@ -328,11 +333,8 @@ function App() {
                     : row.triggerPrice > 0 && <small>SL {money(row.triggerPrice)}</small>}</td>
                 <td>{row.orderStatus}<small>{row.averageTradedPrice > 0 ? 'Avg ' + money(row.averageTradedPrice) : row.omsErrorDescription}</small></td>
                 <td>{pending(row) && regular(row) && <div className="row-actions">
-                  {editing ? <><button disabled={working} onClick={saveEdit}>Save</button><button onClick={() => setEdit(null)}>Discard</button></>
-                    : <button disabled={!state?.liveReady || !fresh || key(row) !== instrumentKey || working ||
-                      !['MARKET', 'LIMIT', 'STOP_LOSS'].includes(row.orderType)} onClick={() => setEdit({
-                        id: row.orderId, quantity: row.quantity, price: row.price, triggerPrice: row.triggerPrice || 0
-                      })}>Edit</button>}
+                  {editing && <><button disabled={working} onClick={saveEdit}>Save</button>
+                    <button onClick={() => setEdit(null)}>Discard</button></>}
                   <button disabled={!canManage} onClick={() => action(async () => {
                     await api('/orders/' + encodeURIComponent(row.orderId), 'DELETE'); setEdit(null);
                   }, 'Cancellation requested')}>Cancel</button>
