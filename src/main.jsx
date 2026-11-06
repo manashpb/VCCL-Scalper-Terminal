@@ -27,11 +27,44 @@ function NumberField({ label, value, change, min = 0, step = 'any', placeholder 
   return <Field label={label}><input type="number" value={value} min={min} step={step}
     placeholder={placeholder} onChange={e => change(e.target.value)}/></Field>;
 }
-function FairPrice({ contract, quote, now }) {
+function readEntrySpots(storageKey) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey));
+    return Array.isArray(saved) ? saved.filter(level => Number.isFinite(level) && level >= .01) : [];
+  } catch {
+    return [];
+  }
+}
+function FairPrice({ symbol, contract, quote, now }) {
+  const storageKey = 'scalper-entry-spots:' + symbol;
+  const [savedSpots, setSavedSpots] = useState(() => readEntrySpots(storageKey));
+  const [storageError, setStorageError] = useState('');
+  useEffect(() => {
+    const sync = event => {
+      if (event.key === storageKey || event.key === null) setSavedSpots(readEntrySpots(storageKey));
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [storageKey]);
   const [entry, setEntry] = useState(''), [sl, setSl] = useState('25'), [target, setTarget] = useState('50');
   const [direction, setDirection] = useState('BUY');
   const liveSpot = now - quote?.receivedAt < 5000 ? quote.spot : null;
   const spot = entry === '' ? liveSpot : Number(entry);
+  const typedSpot = Number(entry);
+  const saved = savedSpots.includes(typedSpot);
+  const canSave = !!symbol.trim() && Number.isFinite(typedSpot) && typedSpot >= .01 && !saved;
+  function updateSavedSpots(remove) {
+    const current = readEntrySpots(storageKey);
+    const updated = remove ? current.filter(level => level !== typedSpot)
+      : [...new Set([...current, typedSpot])].sort((a, b) => a - b);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      setSavedSpots(updated);
+      setStorageError('');
+    } catch {
+      setStorageError('This browser could not update the saved entry spots.');
+    }
+  }
   const sign = (contract?.optionType === 'PE' ? -1 : 1) * (direction === 'SELL' ? -1 : 1);
   const levels = [
     ['Entry', spot],
@@ -48,6 +81,16 @@ function FairPrice({ contract, quote, now }) {
       <NumberField label="SL spot pts" value={sl} change={setSl}/>
       <NumberField label="Target spot pts" value={target} change={setTarget}/>
     </div>
+    <div className="fair-saved">
+      <select aria-label="Saved entry spots" value={saved ? typedSpot : ''} disabled={!savedSpots.length}
+        onChange={e => setEntry(e.target.value)}>
+        <option value="" disabled>{savedSpots.length ? 'Saved entry spots' : 'No saved entry spots'}</option>
+        {savedSpots.map(level => <option key={level} value={level}>{level}</option>)}
+      </select>
+      <button type="button" disabled={!canSave} onClick={() => updateSavedSpots(false)}>Save spot</button>
+      <button type="button" disabled={!saved} onClick={() => updateSavedSpots(true)}>Delete saved</button>
+    </div>
+    {storageError && <small role="alert">{storageError}</small>}
     <div className="fair-results">{levels.map(([label, level]) =>
       <span key={label}>{label} <b>{premium(level)}</b><small>Spot {level > 0 ? money(level) : '—'}</small></span>)}</div>
     <small>Estimated premium per unit using the Dhan quote and its delta, gamma and theta.</small>
@@ -289,7 +332,7 @@ function App() {
         <NumberField label="Premium SL pts" value={sl} change={setSl}/>
         <NumberField label="Premium target pts" value={target} change={setTarget}/>
       </div>}
-      <FairPrice key={symbol} contract={instrument} quote={quote} now={now}/>
+      <FairPrice key={symbol} symbol={symbol} contract={instrument} quote={quote} now={now}/>
     </section>
 
     <section className="books" aria-label={brokerNames[broker] + ' account'}>

@@ -66,6 +66,7 @@ small, .muted { color: #9bacc2; }
 .fair summary { cursor: pointer; font-weight: 600; }
 .fair summary strong { margin-left: 4px; color: #8ee9d3; }
 .fair[open] summary { margin-bottom: 5px; }
+.fair-saved { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px; margin-top: 5px; }
 .fair-results { display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0; font-variant-numeric: tabular-nums; }
 .fair-results small { display: block; }
 .book-tools { padding: 5px; flex-wrap: wrap; }
