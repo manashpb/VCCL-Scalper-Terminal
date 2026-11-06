@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { parse } from 'csv-parse/sync';
 import { keyOf } from './domain.mjs';
 
 const kiteExchange = { NSE_FNO: 'NFO', BSE_FNO: 'BFO' };
 const orderType = { SL: 'STOP_LOSS', 'SL-M': 'STOP_LOSS_MARKET' };
+const transientConnectionErrors = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET']);
 const day = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 
 export function matchContract(instrument, row) {
@@ -41,15 +43,25 @@ export class Zerodha {
     if (token) headers.Authorization = `token ${this.apiKey}:${token}`;
     let response;
     try {
-      response = await fetch(`https://api.kite.trade${path}`, {
+      const url = `https://api.kite.trade${path}`;
+      const options = {
         method, headers, redirect: 'error', signal: AbortSignal.timeout(12000),
         body: fields ? new URLSearchParams(fields) : undefined
-      });
+      };
+      try {
+        response = await fetch(url, options);
+      } catch (error) {
+        if (method !== 'GET' || options.signal.aborted || !transientConnectionErrors.has(error.cause?.code)) throw error;
+        await delay(250, undefined, { signal: options.signal });
+        response = await fetch(url, options);
+      }
     } catch {
       const orderMutation = method !== 'GET' && path.startsWith('/orders/');
       throw new Error(orderMutation
         ? 'Zerodha response unavailable. Reconcile the order book before retrying.'
-        : 'Zerodha API unavailable');
+        : method === 'GET' && token
+          ? 'Kite session retained. Zerodha account data is temporarily unavailable and will refresh automatically.'
+          : 'Zerodha API unavailable');
     }
     if (response.ok && path === '/instruments') return response.text();
     const json = await response.json().catch(() => null);

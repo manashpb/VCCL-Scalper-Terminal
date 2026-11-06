@@ -55,6 +55,25 @@ test('Kite retains its token during gateway failures and drops it on broker reje
   assert.equal(broker.connected, false);
 });
 
+test('Kite retries a failed DNS lookup for reads without repeating order submissions', async t => {
+  const broker = new Zerodha(instruments, { ZERODHA_API_KEY: 'key' });
+  broker.token = 'test';
+  broker.connected = true;
+  const failure = new TypeError('fetch failed', { cause: { code: 'EAI_AGAIN' } });
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => {
+    throw failure;
+  });
+  fetchMock.mock.mockImplementationOnce(async () => {
+    throw failure;
+  }, 0);
+  fetchMock.mock.mockImplementationOnce(async () => Response.json({ status: 'success', data: [] }), 1);
+  assert.deepEqual(await broker.fetch('/orders'), []);
+  assert.equal(fetchMock.mock.callCount(), 2);
+  await assert.rejects(broker.fetch('/orders/regular', 'POST'), /Reconcile the order book/);
+  assert.equal(fetchMock.mock.callCount(), 3);
+  assert.equal(broker.connected, true);
+});
+
 test('broker mutations cannot cross account books and position close preserves the product', async () => {
   const app = express();
   app.use(express.json());
