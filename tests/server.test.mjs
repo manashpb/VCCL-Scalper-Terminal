@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 async function running(extra,fn){
   const port=19000+Math.floor(Math.random()*1000),origin=`http://127.0.0.1:${port}`;
-  const p=spawn(process.execPath,[fileURLToPath(new URL('../server/index.mjs',import.meta.url))],{env:{...process.env,NODE_ENV:'test',FNO_MARKETDATA_URL:'',DHAN_CLIENT_ID:'',DHAN_ACCESS_TOKEN:'',DHAN_PIN:'',DHAN_TOTP_SECRET:'',ALLOW_LIVE_TRADING:'false',PORT:String(port),SCALPER_ORIGIN:origin,...extra},stdio:'pipe'});
+  const p=spawn(process.execPath,[fileURLToPath(new URL('../server/index.mjs',import.meta.url))],{env:{...process.env,NODE_ENV:'test',FYERS_APP_ID:'',FYERS_SECRET_ID:'',ALLOW_LIVE_TRADING:'false',PORT:String(port),SCALPER_ORIGIN:origin,...extra},stdio:'pipe'});
   let log='';p.stdout.on('data',d=>log+=d);p.stderr.on('data',d=>log+=d);
   try {let r;const deadline=Date.now()+30000;while(Date.now()<deadline){if(p.exitCode!==null)break;try{r=await fetch(origin+'/scalper/api/state',{signal:AbortSignal.timeout(5000)});break;}catch{await new Promise(r=>setTimeout(r,100));}}assert.ok(r,`Server failed to start: ${log}`);await fn(origin,r);}finally{p.kill();await new Promise(r=>{if(p.exitCode!==null||p.signalCode!==null)r();else p.once('exit',r);});}
 }
@@ -23,7 +23,7 @@ test('production honors portal verification of the shared cookie, not forwarded 
 });
 test('local preview isolates broker state and cannot execute any orders', () => running({LOCAL_DEMO:'true'}, async (origin, response) => {
   const state = await response.json();
-  assert.equal(state.broker, 'dhan');
+  assert.equal(state.broker, 'zerodha');
   const headers = { 'Content-Type': 'application/json', Origin: origin, 'X-CSRF-Token': state.csrf, 'X-Scalper-Broker': 'zerodha' };
   const call = (path, method, h = headers) => fetch(origin + '/scalper/api' + path, {
     method, headers: h, body: method === 'GET' ? undefined : '{}'
@@ -32,7 +32,7 @@ test('local preview isolates broker state and cannot execute any orders', () => 
   assert.equal(kite.broker, 'zerodha');
   assert.deepEqual(kite.orders, []);
   assert.equal(kite.liveReady, false);
-  const invalid = await call('/state', 'GET', { ...headers, 'X-Scalper-Broker': 'constructor' });
+  const invalid = await call('/state', 'GET', { ...headers, 'X-Scalper-Broker': 'dhan' });
   assert.equal(invalid.status, 400);
   const wrongOrigin = await call('/connect', 'POST', { ...headers, Origin: 'https://evil.example' });
   const wrongCsrf = await call('/orders', 'POST', { ...headers, 'X-CSRF-Token': 'bad' });

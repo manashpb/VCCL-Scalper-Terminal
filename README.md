@@ -4,15 +4,26 @@ Compact, single-owner options terminal at **`/scalper/`** in the VCCL workspace.
 The service binds to loopback port **5003** and uses the existing portal login.
 
 - One option ticket with a CE/PE toggle, an ATM-centered strike picker and the current spot, bid, ask and premium.
-- Market, limit and stop-limit entries. Limit pricing supports manual price, LTP and midpoint. Dhan also supports broker-managed Super Orders for eligible entries.
-- Select Dhan or Zerodha to see that account's orders, positions and P&L. Cancel or edit pending regular orders, or close the selected option position. Bulk cancellation targets regular orders tagged by the terminal.
-- Fair price shows the FNO Analyzer's quote-based entry, stop and target estimates for the selected option. It uses the same Dhan snapshot's spot, premium, delta, gamma and theta, and leaves estimates blank when inputs are stale or missing.
+- Market, limit and stop-limit entries. Limit pricing supports manual price, LTP and midpoint.
+- Zerodha supplies the account's orders, positions and P&L. Cancel or edit pending regular orders, or close the selected option position. Bulk cancellation targets regular orders tagged by the terminal.
+- Fair price shows the FNO Analyzer's quote-based entry, stop and target estimates for the selected option. It uses FYERS spot, option premium, and option-chain delta, gamma and theta, and leaves estimates blank when inputs are stale or missing.
 
-Both brokers use the FNO Analyzer's existing Dhan browser-token bridge for prices. Token Sync refreshes that session independently of trading connections. Kite Connect supplies instrument identifiers and the Zerodha account's books and execution. DhanHQ supplies the Dhan account's books and execution.
+FYERS provides spot and option quotes over its data WebSocket. Zerodha handles
+orders, account books and execution. Public instrument masters provide symbol
+mapping and execution metadata.
 
-## Broker setup
+## Connections
 
-Follow [server setup](docs/SERVER-SETUP.md) for private credentials and IP whitelisting. Select the broker next to **Connection**. For Dhan, click **Connect Dhan API** to use its configured token or TOTP login. For Zerodha, generate and open a Kite login, then paste its full redirect URL into the connection dialog. The backend verifies the login state and account before exchanging the request token.
+Configure the apps in the [server setup guide](docs/SERVER-SETUP.md). Open
+**FYERS → Generate FYERS login**, sign in, and paste the full redirect URL.
+Set up Zerodha separately under **Connection → Generate Kite login**.
+
+The Fair Price calculator calls the FYERS option chain for Greeks at most once
+every 30 seconds across the whole Scalper, with one request in flight. It shares
+results across strikes for the same expiry. A rate-limit response triggers at
+least five minutes of backoff or the broker's longer Retry-After. Two rate-limit
+responses in one IST day suspend option-chain requests until the next day.
+WebSocket quotes continue during the backoff.
 
 Live execution is ready when the broker is connected, the server IP is configured, and quotes and broker books are current. Set `ALLOW_LIVE_TRADING=false` on the server for read-only use.
 
@@ -29,7 +40,6 @@ npm test
 npm run build
 node tests/browser.mjs
 $env:LOCAL_DEMO='true'
-$env:FNO_MARKETDATA_URL=''
 $env:ALLOW_LIVE_TRADING='false'
 npm start
 ```
@@ -38,12 +48,6 @@ Open `http://127.0.0.1:5003/scalper/`. Local preview supplies sample quotes and 
 
 ### API references
 
-- [DhanHQ authentication](https://dhanhq.co/docs/v2/authentication/)
+- [FYERS Data Socket](https://fyers.in/api-docs/v3/api/websockets/data-socket/)
 - [Kite Connect authentication](https://kite.trade/docs/connect/v3/user/)
 - [Kite Connect orders](https://kite.trade/docs/connect/v3/orders/)
-
-### Shared daily Dhan connection
-
-The scalper saves validated trading tokens server-side in ignored `data/dhan-session.json`. It reuses valid tokens on the same Asia/Kolkata day after restart. Invalid configured tokens fall back to PIN/TOTP authentication when configured. Authentication recovery never retries orders.
-
-The recorder automatically imports this connection and follows token replacements with its account binding checks. Manually entered recorder tokens remain memory-only. Both services may set `DHAN_SESSION_FILE` to the same private absolute path; by default the recorder reads the sibling scalper cache. Restrict the cache folder to the service account using filesystem permissions (Windows ACLs). Tokens never reach the browser.

@@ -12,28 +12,21 @@ nano .env
 chmod 600 .env
 ```
 
-Use **one** authentication method:
+## FYERS market data
+
+Use your FYERS non-trading app. Set these in the private server environment.
 
 ```dotenv
-# TOTP login (recommended for this terminal)
-DHAN_CLIENT_ID=YOUR_DHAN_CLIENT_ID
-DHAN_PIN=YOUR_SIX_DIGIT_DHAN_PIN
-DHAN_TOTP_SECRET=YOUR_BASE32_AUTHENTICATOR_SETUP_SECRET
-DHAN_ACCESS_TOKEN=
+FYERS_APP_ID=YOUR_FYERS_APP_ID
+FYERS_SECRET_ID=YOUR_FYERS_SECRET_ID
+FYERS_REDIRECT_URL=http://127.0.0.1:65534/
 ```
 
-The TOTP secret is the setup key that generates rotating codes, not the current
-six-digit code. Do not paste a QR image or `otpauth://` URI into this field.
-Alternatively, use a manually generated DhanHQ token:
-
-```dotenv
-DHAN_CLIENT_ID=YOUR_DHAN_CLIENT_ID
-DHAN_ACCESS_TOKEN=YOUR_DHANHQ_ACCESS_TOKEN
-DHAN_PIN=
-DHAN_TOTP_SECRET=
-```
-
-The backend reuses a valid same-day Dhan session. It verifies an access token before use and can fall back to configured PIN/TOTP credentials when the token expires.
+After restarting, open **FYERS → Generate FYERS login** in the Scalper, then
+open the sign-in link. Copy the full redirect URL from the browser address bar
+and paste it into the FYERS connection dialog. The loopback tab may show a
+connection error when there is no local listener. Keep the redirect URL private.
+Generate a new login after the FYERS session expires or the Scalper restarts.
 
 ## Zerodha Kite Connect
 
@@ -60,20 +53,11 @@ Keep these server settings as configured during installation:
 PORT=5003
 SCALPER_ORIGIN=YOUR_EXACT_WORKSPACE_ORIGIN
 PORTAL_VERIFY_URL=http://127.0.0.1:5001/verify
-FNO_MARKETDATA_URL=http://127.0.0.1:8001
 LOCAL_DEMO=false
-DHAN_STATIC_IP=YOUR_BACKEND_OUTBOUND_PUBLIC_IP
 ALLOW_LIVE_TRADING=true
 MAX_ORDER_QUANTITY=5000
 MAX_ORDER_NOTIONAL=500000
 ```
-
-Register that outbound public IP in DhanHQ's static-IP whitelist. Merely entering
-it in `.env` does not register it. This is the backend server's IP, not your laptop
-IP. Trading/segment access must be active for the contracts you intend to trade.
-Market data comes from the existing FNO browser-token service; no paid DhanHQ
-data plan is required. Refresh the Dhan browser token using VCCL Token Sync.
-No browser JWT needs to be entered in this file.
 
 Restart only this process after editing the file:
 
@@ -83,7 +67,7 @@ pm2 restart scalper-terminal --update-env
 ```
 
 Open Scalper Terminal from the workspace. With `ALLOW_LIVE_TRADING=false`, verify
-the selected broker's connection and books, and verify Dhan quotes independently.
+the Zerodha connection and books, and verify FYERS quotes independently.
 Live execution is enabled by default once the broker and data are ready.
 Set `ALLOW_LIVE_TRADING=false` for read-only use. The app assumes a single
 owner and keeps the two broker sessions separate.
@@ -104,12 +88,9 @@ pm2 save
 
 Review unexpected local changes before pulling. Restarting clears the in-memory Kite session. Existing orders remain with each broker.
 
-## Snapshot limits
+## Quote and option-chain limits
 
-Browser data is polled, not tick-by-tick streaming. A one-second FNO cache keeps
-its original acquisition timestamp; this is fetch age, not guaranteed exchange
-tick age. Up to four symbol/expiry groups are polled in rotation. Missing quotes,
-stale responses and wrong expiry never fall back to the paid API or simulated
-prices in production. Underlying bid/ask is unavailable in the chain and stays
-blank; midpoint pricing requires real bid and ask. Public Dhan instrument CSV
-metadata still supplies execution IDs, lots, ticks and freeze limits.
+Execution requires fresh FYERS WebSocket quotes with their exchange feed time.
+FYERS option-chain requests are reserved for Fair Price Greeks and share a
+global 30-second request interval. Switching symbols or reconnecting the socket
+does not reset that interval or the rate-limit backoff.

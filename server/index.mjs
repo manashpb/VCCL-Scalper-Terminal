@@ -1,9 +1,8 @@
 import express from 'express';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Instruments } from './instruments.mjs';
-import { Dhan } from './dhan.mjs';
-import { BrowserMarketData } from './market-data.mjs';
+import { FyersMarketData } from './fyers-market.mjs';
 import { Zerodha } from './zerodha.mjs';
 import { installTrading } from './trading.mjs';
 import { keyOf, roundTick } from './domain.mjs';
@@ -11,10 +10,11 @@ import { keyOf, roundTick } from './domain.mjs';
 const env=process.env, port=Number(env.PORT || 5003), origin=env.SCALPER_ORIGIN || `http://127.0.0.1:${port}`;
 const localDemo=env.LOCAL_DEMO==='true';
 if (localDemo && env.ALLOW_LIVE_TRADING==='true') throw new Error('LOCAL_DEMO cannot enable live trading');
-const app=express(), instruments=new Instruments(), dhan=new Dhan({...env,DHAN_SESSION_FILE:env.DHAN_SESSION_FILE || fileURLToPath(new URL('../data/dhan-session.json',import.meta.url))}), demoQuotes=new Map(), csrf=randomBytes(32).toString('hex');
-const market=new BrowserMarketData(instruments,env);
+const app=express(), instruments=new Instruments(), demoQuotes=new Map(), csrf=randomBytes(32).toString('hex');
+const market=new FyersMarketData(instruments,env);
 const zerodha = new Zerodha(instruments, env);
-let selection = [], subscription = 0;
+const fyersLogins = new Map();
+let fyersConnecting = false;
 app.disable('x-powered-by');
 app.use((req,res,next)=>{
   res.set({'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"}); next();
@@ -38,24 +38,48 @@ app.use('/scalper/api',(req,res,next)=>{
 const route=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
 const quotes=()=>market.enabled?market.quotes:demoQuotes;
 
-installTrading({ app, route, env, localDemo, csrf, dhan, zerodha, instruments, market, quotes });
+installTrading({ app, route, env, localDemo, csrf, zerodha, instruments, market, quotes });
 app.get('/scalper/api/symbols',(req,res)=>res.json({symbols:market.enabled?market.symbols():instruments.symbols()}));
 app.get('/scalper/api/contracts',route(async(req,res)=>res.json(market.enabled?await market.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')):instruments.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')))));
 app.post('/scalper/api/subscribe',route(async(req,res)=>{
   if(!Array.isArray(req.body.keys)||req.body.keys.length>100)throw new Error('Select at most 100 instruments');
   const items=req.body.keys.map(k=>instruments.byKey.get(k));if(items.some(i=>!i))throw new Error('Unknown instrument');
-  const request=++subscription;
-  if(market.enabled)await market.subscribe(items);
-  if(request===subscription)selection=items;
+  if(market.enabled)market.subscribe(items);
   res.json({ok:true});
 }));
 
-app.post('/scalper/api/market/reconnect',route(async(req,res)=>{
-  if(!market.enabled)throw new Error('Browser data is disabled in local preview');
-  await market.start(true);
-  const items=selection.map(i=>instruments.byKey.get(keyOf(i))).filter(Boolean);
-  if(items.length)await market.subscribe(items);
-  res.json({ok:true});
+const loginOwner = req => createHash('sha256').update(req.headers.cookie || '').digest('hex');
+app.post('/scalper/api/market/fyers-login', route((req, res) => {
+  if (localDemo) throw new Error('FYERS is disabled in local preview');
+  const state = randomBytes(24).toString('hex');
+  const url = market.loginUrl(state);
+  for (const [id, login] of fyersLogins) if (login.expires < Date.now()) fyersLogins.delete(id);
+  fyersLogins.set(loginOwner(req), { state, expires: Date.now() + 600000 });
+  res.json({ url });
+}));
+app.post('/scalper/api/market/fyers-connect', route(async (req, res) => {
+  if (localDemo || !market.configured) throw new Error('FYERS market data is unavailable');
+  if (fyersConnecting) throw new Error('A FYERS connection is already in progress');
+  const owner = loginOwner(req), login = fyersLogins.get(owner);
+  let callback;
+  try { callback = new URL(String(req.body.callback || '')); }
+  catch { throw new Error('Paste the full FYERS redirect URL'); }
+  const code = callback.searchParams.get('auth_code');
+  if (callback.origin !== market.redirect.origin || callback.pathname !== market.redirect.pathname ||
+      !login || login.expires < Date.now() || login.state !== callback.searchParams.get('state') ||
+      !code || code.length > 4096) throw new Error('FYERS redirect is invalid or expired. Generate a fresh login.');
+  fyersLogins.delete(owner);
+  fyersConnecting = true;
+  try {
+    await market.connect(code);
+    res.json({ ok: true });
+  } finally { fyersConnecting = false; }
+}));
+app.post('/scalper/api/market/reconnect', route(async (req, res) => {
+  if (localDemo || fyersConnecting) throw new Error('FYERS reconnect is unavailable');
+  if (!market.symbolMap.size) await market.start();
+  market.connectSocket();
+  res.json({ ok: true });
 }));
 app.use('/scalper',express.static(fileURLToPath(new URL('../dist/',import.meta.url)),{index:'index.html'}));
 app.get('/',(req,res)=>res.redirect('/scalper/'));
@@ -75,5 +99,5 @@ if (localDemo && !market.enabled) setInterval(() => {
 export const server = app.listen(port, '127.0.0.1', () => console.log('Scalper Terminal listening on loopback port ' + port));
 if (market.enabled && env.NODE_ENV !== 'test') market.start().catch(() => {});
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-  dhan.disconnect(); zerodha.disconnect(); market.stop(); server.close(() => process.exit());
+  zerodha.disconnect(); market.stop(); server.close(() => process.exit());
 });

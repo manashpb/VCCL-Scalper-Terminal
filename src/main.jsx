@@ -7,7 +7,6 @@ import './styles.css';
 const key = i => i ? i.exchangeSegment + ':' + i.securityId : '';
 const money = v => Number.isFinite(v) ? v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 const pending = o => ['PENDING', 'TRANSIT', 'PART_TRADED'].includes(o.orderStatus);
-const brokerNames = { dhan: 'Dhan', zerodha: 'Zerodha' };
 const emptyContracts = { expiries: [], options: [], spot: null };
 const tick = (v, i) => Number((Math.round(v / i.tickSize) * i.tickSize).toFixed(6));
 function uuid() {
@@ -93,41 +92,38 @@ function FairPrice({ symbol, contract, quote, now }) {
     {storageError && <small role="alert">{storageError}</small>}
     <div className="fair-results">{levels.map(([label, level]) =>
       <span key={label}>{label} <b>{premium(level)}</b><small>Spot {level > 0 ? money(level) : '—'}</small></span>)}</div>
-    <small>Estimated premium per unit using the Dhan quote and its delta, gamma and theta.</small>
+    <small>Estimated premium per unit using the FYERS quote and its delta, gamma and theta.</small>
   </details>;
 }
 
 function App() {
-  const [broker, setBroker] = useState(() => localStorage.getItem('scalper-broker') === 'zerodha' ? 'zerodha' : 'dhan');
   const [state, setState] = useState(null), [symbols, setSymbols] = useState([]);
   const [symbol, setSymbol] = useState('NIFTY'), [expiry, setExpiry] = useState('');
   const [contracts, setContracts] = useState(emptyContracts), [side, setSide] = useState('CE');
   const [strike, setStrike] = useState({}), [offset, setOffset] = useState('0');
   const [lots, setLots] = useState('1'), [type, setType] = useState('MARKET');
   const [basis, setBasis] = useState('LIMIT'), [price, setPrice] = useState(''), [trigger, setTrigger] = useState(''), [gap, setGap] = useState('1');
-  const [protect, setProtect] = useState(false), [sl, setSl] = useState('10'), [target, setTarget] = useState('20');
   const [shortcuts, setShortcuts] = useState(false), [tab, setTab] = useState('orders');
   const [settings, setSettings] = useState(false);
-  const [kiteUrl, setKiteUrl] = useState(''), [callback, setCallback] = useState('');
+  const [loginUrl, setLoginUrl] = useState(''), [callback, setCallback] = useState('');
+  const fyersSettings = settings === 'fyers';
   const [edit, setEdit] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState('');
   const [working, setWorking] = useState(false), [now, setNow] = useState(Date.now());
-  const csrf = useRef(''), inflight = useRef(false), activeBroker = useRef(broker);
+  const csrf = useRef(''), inflight = useRef(false);
   const api = useCallback(async (path, method = 'GET', data) => {
-    const headers = { 'X-Scalper-Broker': broker };
+    const headers = { 'X-Scalper-Broker': 'zerodha' };
     if (method !== 'GET') Object.assign(headers, { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.current });
     const response = await fetch('/scalper/api' + path, { method, headers, body: data === undefined ? undefined : JSON.stringify(data) });
     if (response.status === 401 || response.redirected) throw new Error('Workspace session expired. Sign in again.');
     const result = await response.json().catch(() => null);
     if (!response.ok || !result) throw new Error(result?.error || 'Terminal server unavailable');
     return result;
-  }, [broker]);
+  }, []);
   const refresh = useCallback(async () => {
     const next = await api('/state');
-    if (activeBroker.current === next.broker) {
-      csrf.current = next.csrf;
-      setState(next);
-      setNow(Date.now());
-    }
+    csrf.current = next.csrf;
+    setState(next);
+    setNow(Date.now());
   }, [api]);
   useEffect(() => {
     let active = true, timer;
@@ -198,18 +194,14 @@ function App() {
     } catch (err) { setError(err.message); }
     finally { inflight.current = false; setWorking(false); }
   }
-  function changeBroker(value) {
-    activeBroker.current = value;
-    localStorage.setItem('scalper-broker', value);
-    setBroker(value); setState(null); setEdit(null); setKiteUrl(''); setCallback('');
-    setProtect(false); setShortcuts(false); setError(''); setMessage('');
+  function openSettings(provider) {
+    setLoginUrl(''); setCallback(''); setError(''); setSettings(provider);
   }
   function changeContract() {
     setStrike({}); setPrice(''); setTrigger(''); setEdit(null);
   }
   const ready = !working && !!state?.liveReady && !!instrument && fresh && Number.isInteger(Number(lots)) && quantity > 0;
   const canManage = !working && !!state?.canManage;
-  const protection = protect && broker === 'dhan' && type !== 'STOP_LOSS' ? 'BOTH' : 'NONE';
   async function sendOrder(transactionType, orderType = type) {
     if (!ready) return;
     await action(async () => {
@@ -223,9 +215,9 @@ function App() {
       }
       await api('/orders', 'POST', {
         requestId: uuid(), key: instrumentKey, side: transactionType, type: orderType, quantity, price: limit,
-        triggerPrice, protection: orderType === 'STOP_LOSS' ? 'NONE' : protection, sl: Number(sl), target: Number(target)
+        triggerPrice
       });
-    }, transactionType + ' order submitted to ' + brokerNames[broker]);
+    }, transactionType + ' order submitted to Zerodha');
   }
   const orderAction = useRef(null);
   orderAction.current = sendOrder;
@@ -242,9 +234,8 @@ function App() {
   }, [shortcuts, settings, edit]);
   const orders = state?.orders || [], positions = state?.positions || [];
   const selectedPositions = positions.filter(p => key(p) === instrumentKey && Number(p.netQty));
-  const closeSupported = p => (broker === 'dhan' ? ['INTRADAY', 'MARGIN'] : ['MIS', 'NRML']).includes(p.productType);
-  const regular = o => broker === 'zerodha' ? o.variety === 'regular' && !o.parentOrderId :
-    !state?.superOrders?.some(s => s.orderId === o.orderId || s.legDetails?.some(l => l.orderId === o.orderId));
+  const closeSupported = p => ['MIS', 'NRML'].includes(p.productType);
+  const regular = o => o.variety === 'regular' && !o.parentOrderId;
   function closePosition(p) {
     action(() => api('/close', 'POST', { key: key(p), product: p.productType, netQty: Number(p.netQty) }),
       'Close order submitted. Check the order book.');
@@ -267,10 +258,8 @@ function App() {
     <header className="bar">
       <div><a className="workspace" href="/" title="VCCL workspace">V</a><h1>Scalper</h1></div>
       <div>
-        <select aria-label="Trading broker" value={broker} disabled={working} onChange={e => changeBroker(e.target.value)}>
-          <option value="dhan">Dhan</option><option value="zerodha">Zerodha</option>
-        </select>
-        <button onClick={() => setSettings(true)} title="Broker settings"><i className={state?.connected ? 'dot on' : 'dot'}/> Connection</button>
+        <button disabled={working} onClick={() => openSettings('fyers')} title="FYERS quote connection"><i className={state?.marketReady ? 'dot on' : 'dot'}/> FYERS</button>
+        <button disabled={working} onClick={() => openSettings('zerodha')} title="Zerodha broker connection"><i className={state?.connected ? 'dot on' : 'dot'}/> Connection</button>
       </div>
     </header>
     {(errors || message) && <div className={'notice ' + (errors ? 'error' : '')} role={errors ? 'alert' : 'status'}>
@@ -301,7 +290,7 @@ function App() {
         <span><small>Spot</small><b>{money(spot)}</b></span>
       </div>
       <div className="contract-status"><span title={instrument?.tradingSymbol}>{instrument?.tradingSymbol || 'Select a contract'}</span>
-        <span className={fresh ? 'green' : 'muted'}>{state?.localDemo ? 'Preview' : fresh ? 'Dhan quotes' : 'Waiting for quote'}</span></div>
+        <span className={fresh ? 'green' : 'muted'}>{state?.localDemo ? 'Preview' : fresh ? 'FYERS quotes' : 'Waiting for quote'}</span></div>
       <div className="order-fields">
         <NumberField label={'Lots' + (lotSize ? ' × ' + lotSize : '')} value={lots} change={setLots} min={1} step={1}/>
         <Field label="Order type"><select value={type} onChange={e => setType(e.target.value)}>
@@ -332,18 +321,12 @@ function App() {
       </div>
       <div className="extras">
         <label><input type="checkbox" checked={shortcuts} disabled={!state?.liveReady} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
-        {broker === 'dhan' && type !== 'STOP_LOSS' &&
-          <label><input type="checkbox" checked={protect} onChange={e => setProtect(e.target.checked)}/> Dhan SL + target</label>}
         <span>{state?.liveReady ? 'Live orders ready' : 'Live orders unavailable'}</span>
       </div>
-      {protection === 'BOTH' && <div className="order-fields">
-        <NumberField label="Premium SL pts" value={sl} change={setSl}/>
-        <NumberField label="Premium target pts" value={target} change={setTarget}/>
-      </div>}
       <FairPrice key={symbol} symbol={symbol} contract={instrument} quote={quote} now={now}/>
     </section>
 
-    <section className="books" aria-label={brokerNames[broker] + ' account'}>
+    <section className="books" aria-label="Zerodha account">
       <div className="book-tools">
         <div className="segmented">
           <button aria-pressed={tab === 'orders'} onClick={() => setTab('orders')}>Orders · {orders.length}</button>
@@ -394,34 +377,43 @@ function App() {
                 <td>{money(row.realizedProfit)}</td><td>{money(row.unrealizedProfit)}</td></>}
             </tr>;
           })}</tbody></table>
-      </div> : <p className="empty">{state?.connected ? 'No ' + tab + ' at ' + brokerNames[broker] + '.' : 'Connect ' + brokerNames[broker] + ' to see its ' + tab + '.'}</p>}
+      </div> : <p className="empty">{state?.connected ? 'No ' + tab + ' at Zerodha.' : 'Connect Zerodha to see its ' + tab + '.'}</p>}
     </section>
-    {settings && <div className="overlay"><section className="modal" role="dialog" aria-modal="true" aria-label="Broker connection">
-      <div className="modal-heading"><h2>{brokerNames[broker]} connection</h2><button aria-label="Close settings" onClick={() => setSettings(false)}>×</button></div>
-      <p>{state?.connected ? 'Connected' : 'Disconnected'} · {state?.credentialsConfigured ? 'API configured' : 'Server API credentials required'}</p>
-      <p>{state?.staticIpConfigured ? 'Server IP configured' : 'Server IP required'} · {state?.liveAllowed ? 'Execution allowed' : 'Execution disabled'}</p>
-      {broker === 'dhan' ? <button disabled={working || !state?.credentialsConfigured || state?.localDemo}
-        onClick={() => action(() => api('/connect', 'POST', {}), 'Dhan connected')}>Connect Dhan API</button>
-        : <div className="connection-form">
-          <button disabled={working || !state?.credentialsConfigured || state?.localDemo} onClick={() => action(async () => {
-            setCallback(''); setKiteUrl((await api('/kite-login', 'POST', {})).url);
-          })}>Generate Kite login</button>
-          {kiteUrl && <>
-            <a href={kiteUrl} target="_blank" rel="noreferrer">Open Kite sign-in ↗</a>
-            <p>After signing in, copy the full redirect URL from that tab and paste it here.</p>
-            <Field label="Kite redirect URL"><input type="password" autoComplete="off" value={callback}
-              onChange={e => setCallback(e.target.value)}/></Field>
-            <button disabled={working || !callback} onClick={() => action(async () => {
-              const url = callback.trim(); setCallback('');
-              await api('/connect', 'POST', { callback: url }); setKiteUrl('');
-            }, 'Zerodha connected')}>Connect Zerodha API</button>
-          </>}
-        </div>}
-      <div className="modal-actions">
-        <button disabled={working || !state?.connected} onClick={() => action(() => api('/disconnect', 'POST', {}), 'Broker disconnected')}>Disconnect</button>
-        <button disabled={working || !state?.marketEnabled} onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Dhan quotes reconnected')}>Reconnect quotes</button>
+    {settings && <div className="overlay"><section className="modal" role="dialog" aria-modal="true"
+      aria-label={fyersSettings ? 'FYERS quote connection' : 'Broker connection'}>
+      <div className="modal-heading"><h2>{fyersSettings ? 'FYERS quotes' : 'Zerodha connection'}</h2>
+        <button aria-label="Close settings" onClick={() => setSettings(false)}>×</button></div>
+      {fyersSettings ? <p>{state?.feed} · {state?.marketConfigured ? 'API configured' : 'Server API credentials required'}</p>
+        : <><p>{state?.connected ? 'Connected' : 'Disconnected'} · {state?.credentialsConfigured ? 'API configured' : 'Server API credentials required'}</p>
+          <p>{state?.staticIpConfigured ? 'Server IP configured' : 'Server IP required'} · {state?.liveAllowed ? 'Execution allowed' : 'Execution disabled'}</p></>}
+      <div className="connection-form">
+        <button disabled={working || state?.localDemo || !(fyersSettings ? state?.marketConfigured : state?.credentialsConfigured)}
+          onClick={() => action(async () => {
+            setCallback('');
+            setLoginUrl((await api(fyersSettings ? '/market/fyers-login' : '/kite-login', 'POST', {})).url);
+          })}>Generate {fyersSettings ? 'FYERS' : 'Kite'} login</button>
+        {loginUrl && <>
+          <a href={loginUrl} target="_blank" rel="noreferrer">Open {fyersSettings ? 'FYERS' : 'Kite'} sign-in ↗</a>
+          <p>After signing in, copy the full redirect URL from that tab and paste it here.</p>
+          <Field label={(fyersSettings ? 'FYERS' : 'Kite') + ' redirect URL'}><input type="password" autoComplete="off"
+            value={callback} onChange={e => setCallback(e.target.value)}/></Field>
+          <button disabled={working || !callback} onClick={() => action(async () => {
+            const url = callback.trim(); setCallback('');
+            await api(fyersSettings ? '/market/fyers-connect' : '/connect', 'POST', { callback: url });
+            setLoginUrl('');
+          }, fyersSettings ? 'FYERS sign-in accepted. Connecting quotes…' : 'Zerodha connected')}>
+            Connect {fyersSettings ? 'FYERS quotes' : 'Zerodha API'}
+          </button>
+        </>}
       </div>
-      {(error || state?.bookError) && <p role="alert" className="red">{error || state.bookError}</p>}
+      <div className="modal-actions">
+        {fyersSettings ? <button disabled={working || !state?.marketConfigured || state?.localDemo}
+          onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Connecting FYERS quotes…')}>Reconnect quotes</button>
+          : <button disabled={working || !state?.connected} onClick={() =>
+            action(() => api('/disconnect', 'POST', {}), 'Broker disconnected')}>Disconnect</button>}
+      </div>
+      {(error || (fyersSettings ? state?.marketError : state?.bookError)) &&
+        <p role="alert" className="red">{error || (fyersSettings ? state?.marketError : state?.bookError)}</p>}
     </section></div>}
   </main>;
 }

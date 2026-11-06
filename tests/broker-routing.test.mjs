@@ -62,12 +62,6 @@ test('broker mutations cannot cross account books and position close preserves t
     try { await fn(req, res); } catch (error) { next(error); }
   };
   const operations = [];
-  const regular = { ...contract, orderId: 'shared-id', orderStatus: 'PENDING', variety: 'regular' };
-  const dhan = { connected: false, connect: async () => { dhan.connected = true; },
-    request: async (path, method) => {
-      if (method === 'DELETE') { operations.push(['dhan', 'cancel']); return; }
-      return path === '/orders' ? [regular] : [];
-    } };
   let firstKiteBook = true;
   const zerodha = { configured: true, connected: false, loginUrl: state => 'https://kite.example/?state=' + state,
     connect: async () => { zerodha.connected = true; },
@@ -82,8 +76,8 @@ test('broker mutations cannot cross account books and position close preserves t
     place: async (_, order) => { operations.push(['zerodha', order.side, order.productType, order.quantity]); return { orderId: 'close' }; }
   };
   const market = { ready: true, enabled: true };
-  installTrading({ app, route, localDemo: false, csrf: 'test', dhan, zerodha, instruments, market,
-    env: { NODE_ENV: 'test', DHAN_STATIC_IP: 'set', ZERODHA_STATIC_IP: 'set' },
+  installTrading({ app, route, localDemo: false, csrf: 'test', zerodha, instruments, market,
+    env: { NODE_ENV: 'test', ZERODHA_STATIC_IP: 'set' },
     quotes: () => new Map([[key, { ltp: 100, receivedAt: Date.now() }]]) });
   app.use((error, req, res, next) => res.status(400).json({ error: error.message }));
   const server = app.listen(0, '127.0.0.1');
@@ -96,9 +90,7 @@ test('broker mutations cannot cross account books and position close preserves t
     return { status: response.status, data: await response.json() };
   }
   try {
-    const dhanConnection = await call('dhan', '/connect', 'POST');
-    assert.equal(dhanConnection.status, 200);
-    assert.equal(dhanConnection.data.liveReady, true);
+    assert.equal((await call('dhan', '/connect', 'POST')).status, 400);
     const login = await call('zerodha', '/kite-login', 'POST');
     const callback = login.data.url + '&request_token=testrequesttoken';
     assert.equal((await call('zerodha', '/connect', 'POST', { callback }, 'session=other')).status, 400);
@@ -109,11 +101,11 @@ test('broker mutations cannot cross account books and position close preserves t
     assert.match(kiteConnection.data.bookError, /Temporary Kite book failure/);
     assert.equal((await call('zerodha', '/orders/shared-id', 'DELETE')).status, 400);
     assert.equal((await call('zerodha', '/state')).data.liveReady, true);
-    assert.equal((await call('dhan', '/orders/shared-id', 'DELETE')).status, 200);
+    assert.equal((await call('dhan', '/orders/shared-id', 'DELETE')).status, 400);
     assert.equal((await call('zerodha', '/close', 'POST', { key, product: 'NRML', netQty: -130 })).status, 400);
     assert.equal((await call('zerodha', '/close', 'POST', { key, product: 'NRML', netQty: -65 })).status, 200);
     assert.equal((await call('zerodha', '/close', 'POST', { key, product: 'NRML', netQty: -65 })).status, 400);
-    assert.deepEqual(operations, [['dhan', 'cancel'], ['zerodha', 'BUY', 'NRML', 65]]);
+    assert.deepEqual(operations, [['zerodha', 'BUY', 'NRML', 65]]);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 

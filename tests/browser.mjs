@@ -53,7 +53,6 @@ try{
   assert.equal(await page.getByLabel('Limit basis').inputValue(), 'LIMIT');
   await page.getByLabel('Order type', {exact: true}).selectOption('MARKET');
 
-  await page.getByLabel('Trading broker').selectOption('zerodha');
   await page.getByRole('region', {name: 'Zerodha account'}).getByText('Connect Zerodha to see its orders.').waitFor();
   await page.getByRole('button', {name: 'Positions', exact: false}).click();
   await page.getByText('Connect Zerodha to see its positions.').waitFor();
@@ -62,8 +61,10 @@ try{
   assert.ok(await page.getByRole('button', {name: 'Generate Kite login'}).isDisabled());
   assert.equal(await page.getByText('ENABLE LIVE', {exact: false}).count(), 0);
   await page.getByRole('button', {name: 'Close settings'}).click();
-  await page.getByLabel('Trading broker').selectOption('dhan');
-  await page.getByRole('region', {name: 'Dhan account'}).getByText('Connect Dhan to see its positions.').waitFor();
+  await page.getByRole('button', {name: 'FYERS', exact: true}).click();
+  await page.getByRole('dialog', {name: 'FYERS quote connection'}).waitFor();
+  assert.ok(await page.getByRole('button', {name: 'Generate FYERS login'}).isDisabled());
+  await page.getByRole('button', {name: 'Close settings'}).click();
 
   await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});
   const sizes = [[320,568],[390,440],[768,600],[900,480],[1024,768],[1440,900],[2560,1080]];
@@ -91,7 +92,6 @@ try{
   await page.screenshot({path:fileURLToPath(new URL('../test-results/scalper-connection-320.png',import.meta.url)),fullPage:true});
   await page.getByRole('button', {name: 'Close settings'}).click();
   // Exercise populated books and actions through intercepted requests only.
-  await page.getByLabel('Trading broker').selectOption('zerodha');
   const selected = await page.getByRole('combobox', {name: 'CE strike', exact: true}).locator('span').first().textContent();
   const contract = (await (await fetch(origin + '/scalper/api/contracts?symbol=NIFTY')).json()).options
     .find(i => i.optionType === 'CE' && i.strike === Number(selected));

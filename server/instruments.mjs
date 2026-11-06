@@ -1,5 +1,5 @@
 import { parse } from 'csv-parse/sync';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { keyOf } from './domain.mjs';
 export function parseInstruments(csv) {
   const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -28,15 +28,31 @@ export class Instruments {
   }
   index() { this.byKey = new Map(this.items.map(i=>[keyOf(i),i])); }
   async load(refresh = false) {
-    let csv;
-    if (!refresh) try { csv = await readFile(new URL('../data/instruments.csv', import.meta.url),'utf8'); } catch {}
-    if (!csv) {
-      const r = await fetch('https://images.dhan.co/api-data/api-scrip-master-detailed.csv', {signal:AbortSignal.timeout(60000)});
-      if (!r.ok) throw new Error('Instrument master download failed'); csv = await r.text();
+    const cache = new URL('../data/instruments.csv', import.meta.url);
+    const dateInIst = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(date);
+    let csv, current = false, downloaded = false;
+    try {
+      csv = await readFile(cache, 'utf8');
+      current = dateInIst((await stat(cache)).mtime) === dateInIst(new Date());
+    } catch {}
+    if (!current || refresh) {
+      try {
+        const response = await fetch('https://images.dhan.co/api-data/api-scrip-master-detailed.csv', {
+          signal: AbortSignal.timeout(60000)
+        });
+        if (!response.ok) throw new Error('Instrument master download failed');
+        csv = await response.text();
+        downloaded = true;
+      } catch (error) {
+        if (!csv) throw error;
+      }
     }
-    const items = parseInstruments(csv); if (items.length < 100) throw new Error('Instrument master is incomplete');
-    await mkdir(new URL('../data/',import.meta.url),{recursive:true});
-    await writeFile(new URL('../data/instruments.csv',import.meta.url),csv);
+    const items = parseInstruments(csv);
+    if (items.length < 100) throw new Error('Instrument master is incomplete');
+    if (downloaded) {
+      await mkdir(new URL('../data/', import.meta.url), { recursive: true });
+      await writeFile(cache, csv);
+    }
     this.items = items; this.demo = false; this.loadedAt = new Date().toISOString(); this.index();
   }
   symbols() {

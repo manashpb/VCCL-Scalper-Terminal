@@ -1,38 +1,83 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BrowserMarketData,snapshotQuotes} from '../server/market-data.mjs';
-const now=Date.now();
-const option={securityId:'42',exchangeSegment:'NSE_FNO',expiry:'2099-01-01',strike:100,optionType:'CE',symbol:'TEST'};
-const spot={securityId:'43',exchangeSegment:'NSE_EQ',expiry:'',strike:0,optionType:'EQ',symbol:'TEST'};
-const group={ticker:'TEST',expiryId:123,items:[option,spot]};
-const data={source:'dhan-browser',ticker:'TEST',expiry:123,refreshed_at:new Date(now).toISOString(),snapshot:{uv:100},strikes:[{sp:100,cSecurityId:'42',cLtp:10,cBid:9,cAsk:11,cD:.5,cG:.001,cT:-7}]};
-test('browser quotes keep acquisition age and missing underlying depth is unavailable',()=>{
-  const q=snapshotQuotes(data,group,now+1000);assert.equal(q[0].receivedAt,now);assert.equal(q[0].bid,9);assert.equal(q[0].ask,11);assert.deepEqual([q[0].spot,q[0].delta,q[0].gamma,q[0].theta],[100,.5,.001,-7]);assert.equal(q[1].ltp,100);assert.equal(q[1].bid,undefined);
-  assert.throws(()=>snapshotQuotes(data,group,now+6000),/stale/);
-  assert.throws(()=>snapshotQuotes({...data,expiry:124},group,now),/mismatch/);
-  assert.throws(()=>snapshotQuotes({...data,source:'aoc'},group,now),/mismatch/);
-  assert.throws(()=>snapshotQuotes({...data,strikes:[{sp:100,cSecurityId:'wrong-expiry',cLtp:10}]},group,now),/security ID/);
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { FyersMarketData, mapFyersSymbols, normalizeFyersTick } from '../server/fyers-market.mjs';
+
+const now = Date.now();
+const expiry = String(Date.parse('2099-11-06T15:30:00+05:30') / 1000);
+const option = { securityId: '42', exchangeSegment: 'NSE_FNO', symbol: 'NIFTY', expiry: '2099-11-06', optionType: 'CE', strike: 100 };
+const spot = { securityId: '13', exchangeSegment: 'IDX_I', symbol: 'NIFTY', isIndex: true };
+const instruments = { items: [option, spot], byKey: new Map([['NSE_FNO:42', option], ['IDX_I:13', spot]]) };
+const optionRow = { key: 'NSE_FNO:42', ticker: 'NSE:NIFTY99NOV100CE', expiry, instrument: option };
+const spotRow = { key: 'IDX_I:13', ticker: 'NSE:NIFTY50-INDEX', instrument: spot };
+const tick = { type: 'sf', symbol: optionRow.ticker, ltp: 10, bid_price: 9, ask_price: 11, exch_feed_time: Math.floor(now / 1000) };
+
+test('FYERS options match exchange token, exact expiry, strike and side, while indices match by name', () => {
+  const optionCsv = ['fy42', 'desc', 14, 65, .05, '', '', '', expiry, optionRow.ticker, 10, 11, 42, 'NIFTY', 26000, 100, 'CE'].join(',');
+  assert.equal(mapFyersSymbols(optionCsv, 'NSE_FNO', instruments).get('NSE_FNO:42').ticker, optionRow.ticker);
+  assert.equal(mapFyersSymbols(optionCsv.replace(expiry, String(Number(expiry) - 86400)), 'NSE_FNO', instruments).size, 0);
+  assert.equal(mapFyersSymbols(optionCsv.replace(',100,CE', ',101,CE'), 'NSE_FNO', instruments).size, 0);
+  const indexCsv = ['fy26000', 'NIFTY 50', 10, 0, .05, '', '', '', '', spotRow.ticker, 10, 10, 26000, 'NIFTY', 26000, -1, 'XX'].join(',');
+  assert.equal(mapFyersSymbols(indexCsv, 'NSE_EQ', instruments).get('IDX_I:13').ticker, spotRow.ticker);
 });
-test('missing/invalid quotes and crossed depth are not fabricated',()=>{
-  const q=snapshotQuotes({...data,strikes:[{sp:100,cSecurityId:'42',cLtp:10,cBid:11,cAsk:9}]},group,now);assert.equal(q[0].bid,undefined);assert.equal(q[0].ask,undefined);
-  assert.equal(snapshotQuotes({...data,strikes:[{sp:100,cLtp:null}]},group,now).length,1);
+
+test('FYERS tick freshness uses the exchange feed timestamp and never makes up depth', () => {
+  const quote = normalizeFyersTick(tick, now);
+  assert.equal(quote.receivedAt, tick.exch_feed_time * 1000);
+  assert.equal(quote.bid, 9);
+  assert.equal(normalizeFyersTick(tick, now + 6000), null);
+  assert.equal(normalizeFyersTick({ ...tick, exch_feed_time: undefined }, now), null);
+  assert.equal(normalizeFyersTick({ ...tick, bid_price: 12 }, now).ask, undefined);
 });
-test('browser-data bridge uses loopback only and never forwards trading/browser credentials',async()=>{
-  assert.throws(()=>new BrowserMarketData({}, {FNO_MARKETDATA_URL:'https://example.com'}),/loopback/);
-  const m=new BrowserMarketData({}, {FNO_MARKETDATA_URL:'http://127.0.0.1:8001',DHAN_ACCESS_TOKEN:'private-test-token'});
-  const original=globalThis.fetch;let options;
-  globalThis.fetch=async(url,args)=>{assert.equal(new URL(url).hostname,'127.0.0.1');options=args;return new Response('{"ok":true}',{status:200});};
-  try{assert.equal((await m.get('/api/dhan/map')).ok,true);assert.equal(options.headers,undefined);}finally{globalThis.fetch=original;}
+
+test('FYERS exchanges the auth code server-side and clears quotes when the socket drops', async t => {
+  const worker = Object.assign(new EventEmitter(), { postMessage: t.mock.fn(), terminate: async () => 0 });
+  const market = new FyersMarketData(instruments, { FYERS_APP_ID: 'test-app', FYERS_SECRET_ID: 'test-secret' }, authorization => {
+    assert.equal(authorization, 'test-app:fake-token');
+    return worker;
+  });
+  market.masterDay = new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+  market.symbolMap = new Map([[optionRow.key, optionRow], [spotRow.key, spotRow]]);
+  market.subscribe([spot]);
+  t.mock.method(globalThis, 'fetch', async (url, request) => {
+    assert.match(url, /validate-authcode$/);
+    assert.deepEqual(JSON.parse(request.body), {
+      grant_type: 'authorization_code', code: 'test-code',
+      appIdHash: createHash('sha256').update('test-app:test-secret').digest('hex')
+    });
+    return Response.json({ s: 'ok', access_token: 'fake-token' });
+  });
+  assert.equal(new URL(market.loginUrl('test-state')).searchParams.get('state'), 'test-state');
+  try {
+    await market.connect('test-code');
+    worker.emit('message', { type: 'connected' });
+    assert.equal(market.ready, true);
+    assert.deepEqual(worker.postMessage.mock.calls[0].arguments[0], [spotRow.ticker]);
+    worker.emit('message', { type: 'tick', message: { ...tick, type: 'if', symbol: spotRow.ticker } });
+    assert.ok(market.quotes.has(spotRow.key));
+    worker.emit('message', { type: 'closed' });
+    assert.equal(market.ready, false);
+    assert.equal(market.quotes.size, 0);
+  } finally { market.stop(); }
 });
-test('polling failures retain original quote ages and do not switch to simulation',async()=>{
-  const m=new BrowserMarketData({}, {FNO_MARKETDATA_URL:'http://127.0.0.1:8001'});m.groups=[group];m.ready=true;m.quotes.set('NSE_FNO:42',{ltp:10,receivedAt:now-6000});
-  m.get=async()=>{throw new Error('Expired browser session');};await m.poll();m.stop();assert.equal(m.enabled,true);assert.match(m.error,/Expired/);
-});
-test('browser connection supplies quotes without trading credentials',async()=>{
-  const expiryId=Date.parse('2099-01-01T00:00:00+05:30')/1000-315532800;
-  const instruments={load:async()=>{},symbols:()=>['TEST'],contracts:()=>({expiries:['2099-01-01'],options:[option],spot})};
-  const m=new BrowserMarketData(instruments,{FNO_MARKETDATA_URL:'http://127.0.0.1:8001'});
-  const paths=[];
-  m.get=async path=>{paths.push(path);if(path==='/api/dhan/map')return {mapped:[{aoc:'TEST'}]};if(path.startsWith('/api/fair-price/expiries'))return {expiries:[{id:expiryId}]};return {...data,expiry:expiryId,refreshed_at:new Date().toISOString()};};
-  try{await m.start();await m.subscribe([option,spot]);await m.poll();assert.equal(m.ready,true);assert.equal(m.quotes.get('NSE_FNO:42').ltp,10);assert.equal(m.quotes.get('NSE_EQ:43').ltp,100);assert.ok(paths.some(p=>p.startsWith('/api/scalper/chain')));}finally{m.stop();}
+
+test('FYERS option-chain request budget is shared across symbols and backs off on rate limits', async t => {
+  const market = new FyersMarketData(instruments, {});
+  market.authorization = 'app:token';
+  market.wanted.set(spotRow.ticker, spotRow);
+  const greeks = { delta: .5, gamma: .001, theta: -7 };
+  const api = t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ s: 'ok', data: { optionsChain: [{ symbol: optionRow.ticker, greeks }] } }));
+  await market.refreshGreeks(optionRow);
+  await market.refreshGreeks({ ...optionRow, ticker: 'OTHER-STRIKE' });
+  assert.equal(api.mock.callCount(), 1);
+  assert.deepEqual(market.chains.get(market.chainKey(spotRow, optionRow)).values.get(optionRow.ticker), greeks);
+  assert.ok(market.nextChainAt >= Date.now() + 29000);
+  market.nextChainAt = 0;
+  api.mock.mockImplementation(async () => Response.json({ code: -360 }, { status: 429, headers: { 'Retry-After': '900' } }));
+  await market.refreshGreeks(optionRow);
+  assert.ok(market.nextChainAt >= Date.now() + 899000);
+  await market.refreshGreeks(optionRow);
+  assert.equal(api.mock.callCount(), 2);
 });

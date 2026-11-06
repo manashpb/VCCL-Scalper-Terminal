@@ -8,13 +8,14 @@
     "server": "node --env-file-if-exists=.env server/index.mjs",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "build": "vite build",
-    "check": "node --check server/index.mjs && node --check server/domain.mjs && node --check server/dhan.mjs && node --check server/instruments.mjs && node --check server/market-data.mjs && node --check server/trading.mjs && node --check server/zerodha.mjs",
+    "check": "node --check server/index.mjs && node --check server/domain.mjs && node --check server/dhan.mjs && node --check server/instruments.mjs && node --check server/fyers-market.mjs && node --check server/fyers-socket.mjs && node --check server/trading.mjs && node --check server/zerodha.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:browser": "node tests/browser.mjs"
   },
   "dependencies": {
     "csv-parse": "^7.0.3",
     "express": "^5.1.0",
+    "fyers-web-sdk-v3": "2.2.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
