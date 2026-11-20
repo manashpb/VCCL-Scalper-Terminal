@@ -104,7 +104,7 @@ test('Alice WebSocket authenticates, waits for acknowledgement and resubscribes 
   const socket = { addEventListener: (name, fn) => events.set(name, fn),
     send: value => sent.push(JSON.parse(value)), close: () => {} };
   const market = new AliceMarketData(broker.instruments, broker, {}, url => {
-    assert.equal(url, 'wss://ws1.aliceblueonline.com/NorenWS'); return socket;
+    assert.equal(url, 'wss://ws1.aliceblueonline.com/NorenWS/'); return socket;
   });
   market.subscribe([contract]);
   await market.connectSocket();

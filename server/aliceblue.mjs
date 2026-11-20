@@ -225,7 +225,7 @@ export class AliceMarketData {
     const generation = this.broker.generation;
     await this.broker.fetch('profile/createWsSess', 'POST', { source: 'API', userId: this.broker.clientId });
     if (!this.broker.connected || generation !== this.broker.generation) return;
-    const socket = this.socketFactory('wss://ws1.aliceblueonline.com/NorenWS');
+    const socket = this.socketFactory('wss://ws1.aliceblueonline.com/NorenWS/');
     this.socket = socket;
     this.status = 'Connecting Alice Blue feed';
     this.ackTimer = setTimeout(() => socket.close(), 15000).unref();
