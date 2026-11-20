@@ -145,6 +145,51 @@ try{
   await page.getByRole('button', {name: 'Cancel pending', exact: true}).click();
   await page.getByText('Pending order cancellation processed', {exact: true}).waitFor();
   assert.deepEqual(calls, ['PUT', 'DELETE', 'CLOSE', 'CANCEL_PENDING']);
+  // Alice Blue ticket requests are intercepted; no broker network call is made.
+  await page.unroute('**/scalper/api/state');
+  await page.route('**/scalper/api/state', async route => {
+    const response = await route.fetch({headers:{...route.request().headers(), 'x-scalper-broker':'zerodha'}});
+    const original = await response.json();
+    await route.fulfill({json:{...original, broker:'aliceblue', localDemo:false, connected:true,
+      credentialsConfigured:true, staticIpConfigured:true, liveAllowed:true, liveReady:true, canManage:true}});
+  });
+  await page.reload();
+  await page.getByLabel('Use bracket order', {exact:true}).waitFor();
+  await page.waitForFunction(() => document.querySelector('.price b').textContent !== '—');
+  const submitted = [];
+  await page.route('**/scalper/api/orders', async route => {
+    assert.equal(route.request().headers()['x-scalper-broker'], 'aliceblue');
+    submitted.push(route.request().postDataJSON());
+    await route.fulfill({json:{orderId:'mock-only'}});
+  });
+  await page.getByLabel('Product type', {exact:true}).selectOption('NRML');
+  assert.equal(await page.getByLabel('Use bracket order', {exact:true}).isDisabled(), true);
+  await page.getByLabel('Order type', {exact:true}).selectOption('STOP_LOSS_MARKET');
+  await page.getByLabel('Trigger price', {exact:true}).fill('120');
+  assert.equal(await page.getByLabel('Limit gap', {exact:true}).count(), 0);
+  await page.getByRole('button', {name:'Buy CE · SL market', exact:true}).click();
+  await page.getByText('BUY order submitted to Alice Blue', {exact:true}).waitFor();
+  assert.equal(submitted[0].productType, 'NRML');
+  assert.equal(submitted[0].type, 'STOP_LOSS_MARKET');
+  assert.equal(submitted[0].price, 0);
+  await page.getByLabel('Product type', {exact:true}).selectOption('INTRADAY');
+  await page.getByLabel('Use bracket order', {exact:true}).check();
+  assert.equal(await page.getByLabel('Order type', {exact:true}).inputValue(), 'LIMIT');
+  await page.getByLabel('Limit price', {exact:true}).fill('100');
+  await page.getByRole('button', {name:'Sell CE · Limit', exact:true}).click();
+  await page.getByText('SELL order submitted to Alice Blue', {exact:true}).waitFor();
+  assert.equal(submitted[1].protection, 'BOTH');
+  assert.equal(submitted[1].productType, 'INTRADAY');
+  assert.equal(submitted[1].sl, 10);
+  for (const [width,height] of [[320,568],[1440,900]]) {
+    await page.setViewportSize({width,height});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path:fileURLToPath(new URL(`../test-results/alice-${width}.png`,import.meta.url)),fullPage:true});
+  }
+  await page.getByRole('button', {name:'Connection',exact:true}).click();
+  await page.getByRole('button', {name:'Use recorder connection',exact:true}).waitFor();
+  assert.equal(await page.getByRole('link', {name:'Open Recorder to sign in',exact:true}).getAttribute('href'), '/recorder/');
+  await page.screenshot({path:fileURLToPath(new URL('../test-results/alice-connection.png',import.meta.url)),fullPage:true});
   const fair=await browser.newPage();
   const frontend=new URL('../../FNO-Analyzer/frontend/',import.meta.url);
   const html=(await readFile(new URL('index.html',frontend),'utf8')).replace(/<script[^>]*>[\s\S]*?<\/script>/g,'').replace(/<link[^>]+>/g,'');

@@ -16,3 +16,7 @@
 - Do not introduce blind order retries or infer fills from placement acknowledgment.
 - Run npm run check, npm test and npm run build. Meaningful UI changes also use
   node tests/browser.mjs (headless installed Chrome); inspect screenshots.
+
+- Alice Blue mode uses Recorder-owned memory sessions via a keyed loopback bridge,
+  Alice V2 contract masters and Alice WebSocket quotes. Recorder stays read-only.
+  Verify the shared session before mutations and never infer bracket fills.

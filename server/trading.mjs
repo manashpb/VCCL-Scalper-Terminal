@@ -14,9 +14,11 @@ function clearBook(b) {
   b.bookAt = 0;
 }
 
-export function installTrading({ app, route, env, localDemo, csrf, zerodha, instruments, market, quotes }) {
+export function installTrading({ app, route, env, localDemo, csrf, zerodha, aliceblue, instruments, market, quotes }) {
+  const defaultBroker = env.EXECUTION_BROKER || "zerodha";
   const brokers = {
-    zerodha: broker(zerodha, zerodha.configured, env.ZERODHA_STATIC_IP)
+    zerodha: broker(zerodha, zerodha.configured, env.ZERODHA_STATIC_IP),
+    ...(aliceblue ? { aliceblue: broker(aliceblue, aliceblue.configured, env.ALICEBLUE_STATIC_IP) } : {})
   };
   const liveAllowed = !localDemo && (env.ALLOW_LIVE_TRADING ?? 'true') === 'true';
   const limits = { maxQuantity: Number(env.MAX_ORDER_QUANTITY || 5000), maxNotional: Number(env.MAX_ORDER_NOTIONAL || 500000) };
@@ -24,8 +26,8 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
   const owner = req => createHash('sha256').update(req.headers.cookie || '').digest('hex');
 
   function nameOf(req, fallback) {
-    const name = req.get('X-Scalper-Broker') || fallback;
-    if (name !== 'zerodha') throw new Error('Zerodha is the execution broker');
+    const name = req.get('X-Scalper-Broker') || fallback || defaultBroker;
+    if (name !== defaultBroker || !brokers[name]) throw new Error('Use the configured execution broker');
     return name;
   }
 
@@ -47,7 +49,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
     if (b.refreshing) return b.refreshing;
     b.refreshing = (async () => {
       try {
-        const next = await zerodha.readBook();
+        const next = await b.adapter.readBook();
         b.book = next;
         b.bookAt = Date.now();
         b.bookError = '';
@@ -105,10 +107,11 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
     return order;
   }
   get('/state', (req, res) => {
-    const name = nameOf(req, 'zerodha');
+    const name = nameOf(req);
     res.json({ ...status(name), ...brokers[name].book, quotes: Object.fromEntries(market.enabled && market.snapshot ? market.snapshot() : quotes()) });
   });
   mutation('post', '/kite-login', (req, res, b, name) => {
+    if (name !== 'zerodha') throw new Error('Sign in through the recorder for the shared Alice Blue connection');
     const state = randomBytes(24).toString('hex');
     const url = zerodha.loginUrl(state);
     logins.set(owner(req), { state, expires: Date.now() + 600000 });
@@ -116,6 +119,19 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
   });
   mutation('post', '/connect', async (req, res, b, name) => {
     if (Date.now() - b.lastConnect < 10000) throw new Error('Wait 10 seconds between connection attempts');
+    if (name === 'aliceblue') {
+      b.lastConnect = Date.now();
+      clearBook(b);
+      try {
+        await b.adapter.connect();
+        await syncBook(b);
+        if (!b.adapter.connected || b.bookError) throw new Error(b.bookError || 'Alice Blue disconnected');
+        await market.connectSocket();
+      } catch (error) {
+        b.adapter.disconnect(); clearBook(b); throw error;
+      }
+      return res.json(status(name));
+    }
     const login = logins.get(owner(req));
     let callback;
     try { callback = new URL(String(req.body.callback || '')); }
@@ -154,6 +170,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
     if (b.requests.has(id)) return res.status(409).json({ error: 'Duplicate request blocked. Review the order book.' });
     const i = instruments.byKey.get(req.body.key);
     if (!i?.expiry) throw new Error('Select an option contract');
+    await b.adapter.verifySession?.();
     const o = validateOrder(req.body, i, quotes().get(req.body.key), limits);
     b.requests.set(id, Date.now());
     try { res.json(await b.adapter.place(i, o, terminalTag(id))); }
@@ -162,7 +179,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
   mutation('delete', '/orders/:id', async (req, res, b) => {
     await requireBook(b);
     const order = pendingOrder(b, req.params.id);
-    try { await zerodha.cancel(order); } finally { await syncBook(b); }
+    try { await b.adapter.cancel(order); } finally { await syncBook(b); }
     res.json({ ok: true });
   });
   mutation('put', '/orders/:id', async (req, res, b, name) => {
@@ -171,12 +188,12 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
     const original = pendingOrder(b, req.params.id);
     const i = instruments.byKey.get(keyOf(original));
     const o = validateOrder({
-      side: original.transactionType, type: original.orderType, protection: 'NONE',
+      side: original.transactionType, type: original.orderType, protection: 'NONE', productType: original.productType,
       quantity: req.body.quantity, price: req.body.price, triggerPrice: req.body.triggerPrice
     }, i, quotes().get(keyOf(original)), limits);
     if (o.quantity < Number(original.filledQty || 0)) throw new Error('Quantity cannot be below filled quantity');
     try {
-      const result = await zerodha.modify(original, o);
+      const result = await b.adapter.modify(original, o);
       res.json(result);
     } finally { await syncBook(b); }
   });
@@ -186,7 +203,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
     try {
       for (const o of b.book.orders.filter(o => pending(o) && regular(o) &&
         /^(?:SCT[0-9a-f]{17}|SC[0-9a-f]{26})$/.test(o.correlationId || ''))) {
-        await zerodha.cancel(o);
+        await b.adapter.cancel(o);
         count++;
         await new Promise(resolve => setTimeout(resolve, 350));
       }
@@ -195,10 +212,10 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
   });
   mutation('post', '/close', async (req, res, b, name) => {
     await requireBook(b);
-    if (!market.ready || instruments.demo) throw new Error('Live FYERS quotes are unavailable');
+    if (!market.ready || instruments.demo) throw new Error('Live quotes are unavailable');
     const { key, product, netQty } = req.body;
     const instrument = instruments.byKey.get(key);
-    const supported = ['MIS', 'NRML'];
+    const supported = ['MIS', 'NRML', 'INTRADAY'];
     if (!instrument?.expiry || !supported.includes(product)) throw new Error('Select a supported option position');
     const position = b.book.positions.find(p => keyOf(p) === key && p.productType === product && Number(p.netQty));
     if (!position || Number(position.netQty) !== netQty) throw new Error('Position changed. Review it before closing.');
@@ -209,10 +226,10 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, inst
       throw new Error('Cancel or reconcile pending orders and protective legs before closing');
     }
     const order = validateOrder({
-      side: netQty > 0 ? 'SELL' : 'BUY', type: 'MARKET', quantity: Math.abs(netQty), protection: 'NONE'
+      side: netQty > 0 ? 'SELL' : 'BUY', type: 'MARKET', quantity: Math.abs(netQty), protection: 'NONE', productType: product
     }, instrument, quotes().get(key), limits);
     const tag = terminalTag(randomUUID());
-    zerodha.contractFor(instrument);
+    b.adapter.contractFor(instrument);
     const lock = { net: netQty, tag };
     b.closes.set(id, lock);
     try {

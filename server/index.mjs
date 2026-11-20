@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Instruments } from './instruments.mjs';
 import { FyersMarketData } from './fyers-market.mjs';
+import { AliceBlue, AliceMarketData } from './aliceblue.mjs';
 import { Zerodha } from './zerodha.mjs';
 import { installTrading } from './trading.mjs';
 import { keyOf, roundTick } from './domain.mjs';
@@ -11,7 +12,9 @@ const env=process.env, port=Number(env.PORT || 5003), origin=env.SCALPER_ORIGIN 
 const localDemo=env.LOCAL_DEMO==='true';
 if (localDemo && env.ALLOW_LIVE_TRADING==='true') throw new Error('LOCAL_DEMO cannot enable live trading');
 const app=express(), instruments=new Instruments(), demoQuotes=new Map(), csrf=randomBytes(32).toString('hex');
-const market=new FyersMarketData(instruments,env);
+const aliceblue = new AliceBlue(instruments, env);
+const aliceMode = env.EXECUTION_BROKER === 'aliceblue';
+const market=aliceMode ? new AliceMarketData(instruments, aliceblue, env) : new FyersMarketData(instruments,env);
 const zerodha = new Zerodha(instruments, env);
 const fyersLogins = new Map();
 let fyersConnecting = false;
@@ -38,7 +41,7 @@ app.use('/scalper/api',(req,res,next)=>{
 const route=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
 const quotes=()=>market.enabled?market.quotes:demoQuotes;
 
-installTrading({ app, route, env, localDemo, csrf, zerodha, instruments, market, quotes });
+installTrading({ app, route, env, localDemo, csrf, zerodha, aliceblue, instruments, market, quotes });
 app.get('/scalper/api/symbols',(req,res)=>res.json({symbols:market.enabled?market.symbols():instruments.symbols()}));
 app.get('/scalper/api/contracts',route(async(req,res)=>res.json(market.enabled?await market.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')):instruments.contracts(String(req.query.symbol||'NIFTY'),String(req.query.expiry||'')))));
 app.post('/scalper/api/subscribe',route(async(req,res)=>{
@@ -78,7 +81,7 @@ app.post('/scalper/api/market/fyers-connect', route(async (req, res) => {
 app.post('/scalper/api/market/reconnect', route(async (req, res) => {
   if (localDemo || fyersConnecting) throw new Error('FYERS reconnect is unavailable');
   if (market.masterError) await market.start();
-  market.connectSocket();
+  await market.connectSocket();
   res.json({ ok: true });
 }));
 app.use('/scalper',express.static(fileURLToPath(new URL('../dist/',import.meta.url)),{index:'index.html'}));
@@ -99,5 +102,5 @@ if (localDemo && !market.enabled) setInterval(() => {
 export const server = app.listen(port, '127.0.0.1', () => console.log('Scalper Terminal listening on loopback port ' + port));
 if (market.enabled && env.NODE_ENV !== 'test') market.start().catch(() => {});
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-  zerodha.disconnect(); market.stop(); server.close(() => process.exit());
+  zerodha.disconnect(); aliceblue.disconnect(); market.stop(); server.close(() => process.exit());
 });

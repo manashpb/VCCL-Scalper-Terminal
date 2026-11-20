@@ -8,9 +8,23 @@ The service binds to loopback port **5003** and uses the existing portal login.
 - Zerodha supplies the account's orders, positions and P&L. Cancel or edit pending regular orders, or close the selected option position. Bulk cancellation targets regular orders tagged by the terminal.
 - Fair price shows the FNO Analyzer's quote-based entry, stop and target estimates for the selected option. It uses FYERS spot, option premium, and option-chain delta, gamma and theta, and leaves estimates blank when inputs are stale or missing.
 
-FYERS provides spot and option quotes over its data WebSocket. Zerodha handles
-orders, account books and execution. Public instrument masters provide symbol
-mapping and execution metadata.
+Alice Blue provides both live spot/option quotes through its WebSocket and order
+execution when `EXECUTION_BROKER=aliceblue`. Sign in once in the Recorder using
+its existing Alice Blue app and callback, then open **Connection → Use recorder
+connection** in Scalper. Session tokens stay in memory and pass only over an
+authenticated loopback connection. Disconnecting Recorder invalidates Scalper
+execution; disconnecting Scalper leaves Recorder running.
+
+The ticket supports **NRML / INTRADAY**, **SL limit / SL market** entries and native
+**bracket orders** with stop and target distances in premium points. NRML maps to
+Alice Blue's LONGTERM product; INTRADAY maps directly. Brackets require INTRADAY
+and a limit or SL limit entry. The API exposes no separate bracket stop-leg type;
+SL market here means an entry type. Broker/exchange eligibility still applies.
+Manage bracket legs and exits in Alice Blue. Placement acknowledgement is never
+interpreted as a fill. Fair Price estimates stay blank when Greeks are unavailable.
+
+The previous FYERS data / Zerodha execution integration remains available with
+`EXECUTION_BROKER=zerodha`.
 
 ## Connections
 

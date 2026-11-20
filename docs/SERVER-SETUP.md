@@ -94,3 +94,38 @@ Execution requires fresh FYERS WebSocket quotes with their exchange feed time.
 FYERS option-chain requests are reserved for Fair Price Greeks and share a
 global 30-second request interval. Switching symbols or reconnecting the socket
 does not reset that interval or the rate-limit backoff.
+
+
+## Shared Alice Blue connection
+
+Keep the Alice Blue app credentials exclusively in Recorder's private `.env`:
+`RECORDER_BROKER=aliceblue`, `ALICEBLUE_APP_KEY`, `ALICEBLUE_API_SECRET`.
+Keep the existing registered redirect `/recorder/api/aliceblue/callback`.
+Do not create a second app or exchange its authorization code twice.
+
+Generate one random 32-byte hex key. Set it as `SCALPER_SESSION_KEY` in Recorder
+and `ALICEBLUE_SESSION_KEY` in Scalper. Both env files must remain mode 600.
+Scalper also needs `EXECUTION_BROKER=aliceblue` and `ALICEBLUE_STATIC_IP` set to the
+backend outbound IP registered with the broker. `ALICEBLUE_USER_ID` optionally
+pins the expected account. No Alice credentials or bearer tokens belong in VITE
+variables, Git, logs or command arguments.
+
+The Recorder bridge is `/internal/scalper-session` on fixed loopback port 5004,
+requires the private key and loopback peer/Host, and is outside `/recorder/`.
+Do not proxy this endpoint publicly. It returns no token when disconnected.
+Recorder remains read-only. Broker tokens are checked before mutations and each
+book refresh; a disconnect, changed session or bridge outage blocks execution.
+Only the active broker's books and actions are exposed. Scalper's disconnect
+clears its local session and feed without disconnecting Recorder.
+
+Restart Recorder after installing its `scalper_session.py` bridge, then restart
+Scalper. Log in through Recorder, then click **Use recorder connection** in
+Scalper. A process restart requires reconnecting. The WebSocket uses the current
+V2 CSV master, double SHA-256 session authentication, 50-second heartbeat and
+resubscription. Old/future feed timestamps and depth-only updates cannot refresh
+premium freshness. Only current-day verified contracts can route orders.
+
+API references: [authentication](https://ant.aliceblueonline.com/productdocumentation/Authentication/),
+[WebSocket](https://ant.aliceblueonline.com/productdocumentation/Websocket/),
+[orders](https://ant.aliceblueonline.com/productdocumentation/orders%20Management/),
+[V2 master](https://ant.aliceblueonline.com/productdocumentation/Contract%20Master/).

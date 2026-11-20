@@ -102,16 +102,21 @@ function App() {
   const [contracts, setContracts] = useState(emptyContracts), [side, setSide] = useState('CE');
   const [strike, setStrike] = useState({}), [offset, setOffset] = useState('0');
   const [lots, setLots] = useState('1'), [type, setType] = useState('MARKET');
+  const [productType, setProductType] = useState('INTRADAY');
+  const [bracket, setBracket] = useState(false), [stopDistance, setStopDistance] = useState('10'), [targetDistance, setTargetDistance] = useState('20');
   const [basis, setBasis] = useState('LIMIT'), [price, setPrice] = useState(''), [trigger, setTrigger] = useState(''), [gap, setGap] = useState('1');
   const [shortcuts, setShortcuts] = useState(false), [tab, setTab] = useState('orders');
   const [settings, setSettings] = useState(false);
   const [loginUrl, setLoginUrl] = useState(''), [callback, setCallback] = useState('');
-  const fyersSettings = settings === 'fyers';
+  const aliceMode = state?.broker === 'aliceblue';
+  const brokerLabel = aliceMode ? 'Alice Blue' : 'Zerodha';
+  const fyersSettings = !aliceMode && settings === 'fyers';
   const [edit, setEdit] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState('');
   const [working, setWorking] = useState(false), [now, setNow] = useState(Date.now());
+  const brokerRef = useRef('');
   const csrf = useRef(''), inflight = useRef(false);
   const api = useCallback(async (path, method = 'GET', data) => {
-    const headers = { 'X-Scalper-Broker': 'zerodha' };
+    const headers = brokerRef.current ? { 'X-Scalper-Broker': brokerRef.current } : {};
     if (method !== 'GET') Object.assign(headers, { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.current });
     const response = await fetch('/scalper/api' + path, { method, headers, body: data === undefined ? undefined : JSON.stringify(data) });
     if (response.status === 401 || response.redirected) throw new Error('Workspace session expired. Sign in again.');
@@ -122,6 +127,7 @@ function App() {
   const refresh = useCallback(async () => {
     const next = await api('/state');
     csrf.current = next.csrf;
+    brokerRef.current = next.broker;
     setState(next);
     setNow(Date.now());
   }, [api]);
@@ -209,21 +215,21 @@ function App() {
       if (orderType === 'LIMIT') {
         if (basis === 'MID' && (!quote.bid || !quote.ask)) throw new Error('Bid and ask are required for midpoint pricing');
         limit = tick(basis === 'MID' ? (quote.bid + quote.ask) / 2 : basis === 'LTP' ? quote.ltp : Number(price), instrument);
-      } else if (orderType === 'STOP_LOSS') {
+      } else if (['STOP_LOSS', 'STOP_LOSS_MARKET'].includes(orderType)) {
         triggerPrice = tick(Number(trigger), instrument);
-        limit = tick(triggerPrice + (transactionType === 'BUY' ? 1 : -1) * Number(gap), instrument);
+        limit = orderType === 'STOP_LOSS_MARKET' ? 0 : tick(triggerPrice + (transactionType === 'BUY' ? 1 : -1) * Number(gap), instrument);
       }
       await api('/orders', 'POST', {
         requestId: uuid(), key: instrumentKey, side: transactionType, type: orderType, quantity, price: limit,
-        triggerPrice
+        triggerPrice, productType, protection: bracket ? 'BOTH' : 'NONE', sl: Number(stopDistance), target: Number(targetDistance)
       });
-    }, transactionType + ' order submitted to Zerodha');
+    }, transactionType + ' order submitted to ' + brokerLabel);
   }
   const orderAction = useRef(null);
   orderAction.current = sendOrder;
   useEffect(() => {
     const handle = e => {
-      if (!shortcuts || settings || edit || e.repeat || e.ctrlKey || e.altKey || e.metaKey ||
+      if (!shortcuts || bracket || settings || edit || e.repeat || e.ctrlKey || e.altKey || e.metaKey ||
           ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'SUMMARY'].includes(e.target.tagName)) return;
       if (e.code !== 'KeyB' && e.code !== 'KeyS') return;
       e.preventDefault();
@@ -231,10 +237,10 @@ function App() {
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [shortcuts, settings, edit]);
+  }, [shortcuts, bracket, settings, edit]);
   const orders = state?.orders || [], positions = state?.positions || [];
   const selectedPositions = positions.filter(p => key(p) === instrumentKey && Number(p.netQty));
-  const closeSupported = p => ['MIS', 'NRML'].includes(p.productType);
+  const closeSupported = p => ['MIS', 'NRML', 'INTRADAY'].includes(p.productType);
   const regular = o => o.variety === 'regular' && !o.parentOrderId;
   function closePosition(p) {
     action(() => api('/close', 'POST', { key: key(p), product: p.productType, netQty: Number(p.netQty) }),
@@ -252,14 +258,14 @@ function App() {
   const orderRows = [...orders].sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')));
   const book = tab === 'orders' ? orderRows : positions;
   const errors = error || state?.marketError || state?.bookError;
-  const orderLabel = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'SL' }[type];
+  const orderLabel = { MARKET: 'Market', LIMIT: 'Limit', STOP_LOSS: 'SL limit', STOP_LOSS_MARKET: 'SL market' }[type];
 
   return <main className="scalper">
     <header className="bar">
       <div><a className="workspace" href="/" title="VCCL workspace">V</a><h1>Scalper</h1></div>
       <div>
-        <button disabled={working} onClick={() => openSettings('fyers')} title="FYERS quote connection"><i className={state?.marketReady ? 'dot on' : 'dot'}/> FYERS</button>
-        <button disabled={working} onClick={() => openSettings('zerodha')} title="Zerodha broker connection"><i className={state?.connected ? 'dot on' : 'dot'}/> Connection</button>
+        {!aliceMode && <button disabled={working} onClick={() => openSettings('fyers')} title="FYERS quote connection"><i className={state?.marketReady ? 'dot on' : 'dot'}/> FYERS</button>}
+        <button disabled={working} onClick={() => openSettings('zerodha')} title={brokerLabel + " broker connection"}><i className={state?.connected ? 'dot on' : 'dot'}/> Connection</button>
       </div>
     </header>
     {(errors || message) && <div className={'notice ' + (errors ? 'error' : '')} role={errors ? 'alert' : 'status'}>
@@ -290,11 +296,12 @@ function App() {
         <span><small>Spot</small><b>{money(spot)}</b></span>
       </div>
       <div className="contract-status"><span title={instrument?.tradingSymbol}>{instrument?.tradingSymbol || 'Select a contract'}</span>
-        <span className={fresh ? 'green' : 'muted'}>{state?.localDemo ? 'Preview' : fresh ? 'FYERS quotes' : 'Waiting for quote'}</span></div>
+        <span className={fresh ? 'green' : 'muted'}>{state?.localDemo ? 'Preview' : fresh ? (aliceMode ? 'Alice Blue quotes' : 'FYERS quotes') : 'Waiting for quote'}</span></div>
       <div className="order-fields">
         <NumberField label={'Lots' + (lotSize ? ' × ' + lotSize : '')} value={lots} change={setLots} min={1} step={1}/>
+        <Field label="Product type"><select value={productType} onChange={e => { setProductType(e.target.value); if (e.target.value === "NRML") setBracket(false); }}><option value="INTRADAY">INTRADAY</option><option value="NRML">NRML</option></select></Field>
         <Field label="Order type"><select value={type} onChange={e => setType(e.target.value)}>
-          <option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP_LOSS">SL limit</option>
+          <option value="MARKET" disabled={bracket}>Market</option><option value="LIMIT">Limit</option><option value="STOP_LOSS">SL limit</option><option value="STOP_LOSS_MARKET" disabled={bracket}>SL market</option>
         </select></Field>
         {type === 'LIMIT' && <>
           <Field label="Limit basis"><select value={basis} onChange={e => setBasis(e.target.value)}>
@@ -302,11 +309,19 @@ function App() {
           </select></Field>
           {basis === 'LIMIT' && <NumberField label="Limit price" value={price} change={setPrice}/>}
         </>}
-        {type === 'STOP_LOSS' && <>
+        {['STOP_LOSS', 'STOP_LOSS_MARKET'].includes(type) && <>
           <NumberField label="Trigger price" value={trigger} change={setTrigger}/>
-          <NumberField label="Limit gap" value={gap} change={setGap}/>
+          {type === "STOP_LOSS" && <NumberField label="Limit gap" value={gap} change={setGap}/>}
         </>}
       </div>
+      {aliceMode && <div className="bracket-fields">
+        <label><input type="checkbox" checked={bracket} disabled={productType !== 'INTRADAY'} onChange={e => {
+          setBracket(e.target.checked); if (e.target.checked && !['LIMIT', 'STOP_LOSS'].includes(type)) setType('LIMIT');
+        }}/> Use bracket order</label>
+        {bracket && <><NumberField label="Bracket SL premium pts" value={stopDistance} change={setStopDistance}/>
+          <NumberField label="Bracket target premium pts" value={targetDistance} change={setTargetDistance}/>
+          <small>INTRADAY only. Broker-managed SL and target; manage legs in Alice Blue. Stop-leg type follows broker rules.</small></>}
+      </div>}
       <div className="trade-row">
         <button className="buy" disabled={!ready} onClick={() => sendOrder('BUY')}>Buy {side} · {orderLabel}</button>
         <button className="sell" disabled={!ready} onClick={() => sendOrder('SELL')}>Sell {side} · {orderLabel}</button>
@@ -320,13 +335,13 @@ function App() {
         </div>
       </div>
       <div className="extras">
-        <label><input type="checkbox" checked={shortcuts} disabled={!state?.liveReady} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
+        <label><input type="checkbox" checked={shortcuts} disabled={!state?.liveReady || bracket} onChange={e => setShortcuts(e.target.checked)}/> B/S market keys</label>
         <span>{state?.liveReady ? 'Live orders ready' : 'Live orders unavailable'}</span>
       </div>
       <FairPrice key={symbol} symbol={symbol} contract={instrument} quote={quote} now={now}/>
     </section>
 
-    <section className="books" aria-label="Zerodha account">
+    <section className="books" aria-label={brokerLabel + " account"}>
       <div className="book-tools">
         <div className="segmented">
           <button aria-pressed={tab === 'orders'} onClick={() => setTab('orders')}>Orders · {orders.length}</button>
@@ -347,7 +362,7 @@ function App() {
             const editing = tab === 'orders' && edit?.id === row.orderId && pending(row);
             const editable = tab === 'orders' && !editing && pending(row) && regular(row) &&
               state?.liveReady && fresh && key(row) === instrumentKey && !working &&
-              ['MARKET', 'LIMIT', 'STOP_LOSS'].includes(row.orderType);
+              ['MARKET', 'LIMIT', 'STOP_LOSS', 'STOP_LOSS_MARKET'].includes(row.orderType);
             const startEdit = () => setEdit({
               id: row.orderId, quantity: row.quantity, price: row.price, triggerPrice: row.triggerPrice || 0
             });
@@ -360,9 +375,9 @@ function App() {
                 <td>{row.transactionType}<small>{row.orderType}</small></td>
                 <td>{editing ? <NumberField label="Quantity" value={edit.quantity} min={lotSize} step={lotSize} change={v => setEdit({ ...edit, quantity: v })}/>
                   : (row.filledQty || 0) + ' / ' + row.quantity}</td>
-                <td>{editing && row.orderType !== 'MARKET'
+                <td>{editing && !['MARKET', 'STOP_LOSS_MARKET'].includes(row.orderType)
                   ? <NumberField label="Limit price" value={edit.price} change={v => setEdit({ ...edit, price: v })}/> : money(row.price)}
-                  {editing && row.orderType === 'STOP_LOSS'
+                  {editing && ['STOP_LOSS', 'STOP_LOSS_MARKET'].includes(row.orderType)
                     ? <NumberField label="Trigger price" value={edit.triggerPrice} change={v => setEdit({ ...edit, triggerPrice: v })}/>
                     : row.triggerPrice > 0 && <small>SL {money(row.triggerPrice)}</small>}</td>
                 <td>{row.orderStatus}<small>{row.averageTradedPrice > 0 ? 'Avg ' + money(row.averageTradedPrice) : row.omsErrorDescription}</small></td>
@@ -377,16 +392,21 @@ function App() {
                 <td>{money(row.realizedProfit)}</td><td>{money(row.unrealizedProfit)}</td></>}
             </tr>;
           })}</tbody></table>
-      </div> : <p className="empty">{state?.connected ? 'No ' + tab + ' at Zerodha.' : 'Connect Zerodha to see its ' + tab + '.'}</p>}
+      </div> : <p className="empty">{state?.connected ? 'No ' + tab + ' at ' + brokerLabel + '.' : 'Connect ' + brokerLabel + ' to see its ' + tab + '.'}</p>}
     </section>
     {settings && <div className="overlay"><section className="modal" role="dialog" aria-modal="true"
       aria-label={fyersSettings ? 'FYERS quote connection' : 'Broker connection'}>
-      <div className="modal-heading"><h2>{fyersSettings ? 'FYERS quotes' : 'Zerodha connection'}</h2>
+      <div className="modal-heading"><h2>{fyersSettings ? 'FYERS quotes' : brokerLabel + ' connection'}</h2>
         <button aria-label="Close settings" onClick={() => setSettings(false)}>×</button></div>
       {fyersSettings ? <p>{state?.feed} · {state?.marketConfigured ? 'API configured' : 'Server API credentials required'}</p>
         : <><p>{state?.connected ? 'Connected' : 'Disconnected'} · {state?.credentialsConfigured ? 'API configured' : 'Server API credentials required'}</p>
           <p>{state?.staticIpConfigured ? 'Server IP configured' : 'Server IP required'} · {state?.liveAllowed ? 'Execution allowed' : 'Execution disabled'}</p></>}
-      <div className="connection-form">
+      {aliceMode ? <div className="connection-form">
+        <p>One Alice Blue login for Recorder and Scalper. Sign in in Recorder, then connect here. Recorder disconnect disables Scalper execution.</p>
+        <a href="/recorder/" target="_blank" rel="noreferrer">Open Recorder to sign in</a>
+        <button disabled={working || state?.localDemo || !state?.credentialsConfigured} onClick={() =>
+          action(() => api('/connect', 'POST', {}), 'Shared Alice Blue session connected')}>Use recorder connection</button>
+      </div> : <div className="connection-form">
         <button disabled={working || state?.localDemo || !(fyersSettings ? state?.marketConfigured : state?.credentialsConfigured)}
           onClick={() => action(async () => {
             setCallback('');
@@ -406,11 +426,12 @@ function App() {
           </button>
         </>}
       </div>
+      }
       <div className="modal-actions">
         {fyersSettings ? <button disabled={working || !state?.marketConfigured || state?.localDemo}
           onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Connecting FYERS quotes…')}>Reconnect quotes</button>
           : <button disabled={working || !state?.connected} onClick={() =>
-            action(() => api('/disconnect', 'POST', {}), 'Broker disconnected')}>Disconnect</button>}
+            action(() => api('/disconnect', 'POST', {}), 'Scalper disconnected; Recorder session unchanged')}>Disconnect</button>}
       </div>
       {(error || (fyersSettings ? state?.marketError : state?.bookError)) &&
         <p role="alert" className="red">{error || (fyersSettings ? state?.marketError : state?.bookError)}</p>}

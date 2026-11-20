@@ -170,8 +170,8 @@ export class Zerodha {
     if (order.protection !== 'NONE') throw new Error('Automatic SL/target is available only for Dhan Super Orders');
     const contract = this.contractFor(instrument);
     const data = await this.fetch('/orders/regular', 'POST', {
-      exchange: contract.exchange, tradingsymbol: contract.tradingsymbol, product: order.productType || 'MIS',
-      transaction_type: order.side, order_type: order.type === 'STOP_LOSS' ? 'SL' : order.type,
+      exchange: contract.exchange, tradingsymbol: contract.tradingsymbol, product: order.productType === 'NRML' ? 'NRML' : 'MIS',
+      transaction_type: order.side, order_type: order.type === 'STOP_LOSS' ? 'SL' : order.type === 'STOP_LOSS_MARKET' ? 'SL-M' : order.type,
       quantity: order.quantity, price: order.price, trigger_price: order.triggerPrice,
       validity: 'DAY', tag: correlationId.slice(0, 20),
       ...(order.type === 'MARKET' ? { market_protection: -1 } : {})
@@ -188,7 +188,7 @@ export class Zerodha {
   modify(original, order) {
     if (original.variety !== 'regular' || original.parentOrderId) throw new Error('Manage special orders directly in Kite');
     return this.fetch(`/orders/regular/${encodeURIComponent(original.orderId)}`, 'PUT', {
-      order_type: order.type === 'STOP_LOSS' ? 'SL' : order.type, quantity: order.quantity,
+      order_type: order.type === 'STOP_LOSS' ? 'SL' : order.type === 'STOP_LOSS_MARKET' ? 'SL-M' : order.type, quantity: order.quantity,
       price: order.price, trigger_price: order.triggerPrice, validity: 'DAY',
       ...(order.type === 'MARKET' ? { market_protection: -1 } : {})
     });

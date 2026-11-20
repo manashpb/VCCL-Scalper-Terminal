@@ -23,13 +23,13 @@ function positive(value, name) {
 export function validateOrder(input, instrument, quote, limits = {}) {
   if (!instrument || instrument.exchangeSegment === 'IDX_I') throw new Error('Select a tradable contract');
   if (!['BUY', 'SELL'].includes(input.side)) throw new Error('Invalid side');
-  if (!['MARKET', 'LIMIT', 'STOP_LOSS'].includes(input.type)) throw new Error('Invalid order type');
+  if (!['MARKET', 'LIMIT', 'STOP_LOSS', 'STOP_LOSS_MARKET'].includes(input.type)) throw new Error('Invalid order type');
   const quantity = positive(Number(input.quantity), 'Quantity');
   if (!Number.isInteger(quantity) || quantity % instrument.lotSize) throw new Error(`Quantity must be a multiple of ${instrument.lotSize}`);
   if (quantity > (limits.maxQuantity || 5000) || (instrument.freezeQty > 0 && quantity > instrument.freezeQty)) throw new Error('Quantity exceeds order/freeze limit');
   if (!quote || Date.now() - quote.receivedAt > 5000 || !Number.isFinite(quote.ltp) || quote.ltp <= 0) throw new Error('Fresh market data required (under 5 seconds)');
-  const price = input.type === 'MARKET' ? 0 : positive(Number(input.price), 'Limit price');
-  const triggerPrice = input.type === 'STOP_LOSS' ? positive(Number(input.triggerPrice), 'Trigger price') : 0;
+  const price = ['MARKET', 'STOP_LOSS_MARKET'].includes(input.type) ? 0 : positive(Number(input.price), 'Limit price');
+  const triggerPrice = ['STOP_LOSS', 'STOP_LOSS_MARKET'].includes(input.type) ? positive(Number(input.triggerPrice), 'Trigger price') : 0;
   for (const p of [price, triggerPrice]) if (p && Math.abs(p - roundTick(p, instrument.tickSize)) > 0.000001) throw new Error(`Price must follow tick size ${instrument.tickSize}`);
   if (input.type === 'STOP_LOSS' && ((input.side === 'BUY' && price < triggerPrice) || (input.side === 'SELL' && price > triggerPrice))) throw new Error('SL limit must be beyond trigger in order direction');
   if (quantity * Math.max(price, quote.ltp) > (limits.maxNotional || 500000)) throw new Error('Order exceeds notional limit');
@@ -41,5 +41,7 @@ export function validateOrder(input, instrument, quote, limits = {}) {
   const stopLossPrice = sl ? roundTick(reference - direction * sl, instrument.tickSize) : 0;
   const targetPrice = target ? roundTick(reference + direction * target, instrument.tickSize) : 0;
   if (sl && stopLossPrice <= 0 || target && targetPrice <= 0) throw new Error('Protection price must be positive');
-  return { side: input.side, type: input.type, quantity, price, triggerPrice, protection, sl, target, stopLossPrice, targetPrice };
+  const productType = input.productType || 'INTRADAY';
+  if (!['NRML', 'INTRADAY', 'MIS'].includes(productType)) throw new Error('Invalid product type');
+  return { productType, side: input.side, type: input.type, quantity, price, triggerPrice, protection, sl, target, stopLossPrice, targetPrice };
 }

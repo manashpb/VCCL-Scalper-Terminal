@@ -56,7 +56,11 @@ small, .muted { color: #9bacc2; }
 .segmented { display: flex; gap: 2px; }
 .segmented button[aria-pressed="true"] { background: #20443c; border-color: #528879; color: #9af0d9; }
 .fair-inputs { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) repeat(2, minmax(0, 1fr)); }
-.order-fields { grid-template-columns: repeat(auto-fit, minmax(57px, 1fr)); }
+.order-fields { grid-template-columns: repeat(auto-fit, minmax(85px, 1fr)); }
+.bracket-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.bracket-fields > label:first-child { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; }
+.bracket-fields > label:first-child input { min-height: auto; margin: 0; }
+.bracket-fields > small { grid-column: 1 / -1; }
 .trade-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .close-actions { display: grid; gap: 5px; }
 .buy { background: #175740; border-color: #397f66; color: #d1ffeb; }
