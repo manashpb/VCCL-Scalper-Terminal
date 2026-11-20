@@ -251,14 +251,19 @@ export class AliceMarketData {
         this.heartbeat = setInterval(() => { if (this.ready) send({ t: 'h', k: '' }); }, 50000).unref();
       } else this.receive(message);
     });
-    socket.addEventListener('error', () => { this.error = 'Alice Blue feed unavailable'; socket.close(); });
-    socket.addEventListener('close', () => {
+    const dropped = () => {
       if (socket !== this.socket) return;
       this.stop();
       if (this.broker.connected) this.reconnect = setTimeout(() => {
         void this.connectSocket().catch(() => { this.error = 'Reconnect Alice Blue through the recorder'; });
       }, 3000).unref();
+    };
+    socket.addEventListener('error', () => {
+      if (socket !== this.socket) return;
+      this.error = 'Alice Blue feed unavailable';
+      dropped();
     });
+    socket.addEventListener('close', dropped);
   }
   subscribe(items) {
     const next = new Map(items.map(i => [`${i.aliceExchange}|${i.securityId}`, i]));

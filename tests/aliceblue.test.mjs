@@ -120,3 +120,22 @@ test('Alice WebSocket authenticates, waits for acknowledgement and resubscribes 
   market.stop();
   assert.equal(market.ready, false);
 });
+
+test('a socket error during close cannot recursively close and crash the terminal', async () => {
+  const broker = new AliceBlue(instruments(), {});
+  broker.connected = true;
+  broker.verifySession = async () => {};
+  broker.fetch = async () => [{ Status: 'OK' }];
+  const events = new Map();
+  let closes = 0;
+  const socket = { addEventListener: (name, fn) => events.set(name, fn), send() {},
+    close() { closes++; events.get('error')(); events.get('close')(); } };
+  const market = new AliceMarketData(broker.instruments, broker, {}, () => socket);
+  await market.connectSocket();
+  events.get('error')();
+  assert.equal(closes, 1);
+  assert.equal(market.ready, false);
+  assert.equal(market.socket, null);
+  assert.equal(market.error, 'Alice Blue feed unavailable');
+  market.stop();
+});
