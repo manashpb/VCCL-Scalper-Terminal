@@ -113,6 +113,14 @@ function App() {
   const fyersSettings = !aliceMode && settings === 'fyers';
   const [edit, setEdit] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState('');
   const [working, setWorking] = useState(false), [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const url = new URL(location.href), result = url.searchParams.get('aliceblue');
+    if (!result) return;
+    if (result === 'connected') setMessage('Alice Blue account connected. Feed readiness is shown separately.');
+    else setError('Alice Blue sign-in failed. Open Connection and start a fresh login.');
+    url.searchParams.delete('aliceblue');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }, []);
   const brokerRef = useRef('');
   const csrf = useRef(''), inflight = useRef(false);
   const api = useCallback(async (path, method = 'GET', data) => {
@@ -402,10 +410,13 @@ function App() {
         : <><p>{state?.connected ? 'Connected' : 'Disconnected'} · {state?.credentialsConfigured ? 'API configured' : 'Server API credentials required'}</p>
           <p>{state?.staticIpConfigured ? 'Server IP configured' : 'Server IP required'} · {state?.liveAllowed ? 'Execution allowed' : 'Execution disabled'}</p></>}
       {aliceMode ? <div className="connection-form">
-        <p>One Alice Blue login for Recorder and Scalper. Sign in in Recorder, then connect here. Recorder disconnect disables Scalper execution.</p>
-        <a href="/recorder/" target="_blank" rel="noreferrer">Open Recorder to sign in</a>
+        <p>Scalper uses its own Alice Blue app and session, separate from Trade Recorder. Complete the broker sign-in to connect this account.</p>
+        <p>Feed: {state?.feed || 'Disconnected'} · {state?.marketReady ? 'Socket authenticated' : 'Not ready'}</p>
         <button disabled={working || state?.localDemo || !state?.credentialsConfigured} onClick={() =>
-          action(() => api('/connect', 'POST', {}), 'Shared Alice Blue session connected')}>Use recorder connection</button>
+          action(async () => { setLoginUrl(''); setLoginUrl((await api('/aliceblue/login', 'POST', {})).url); },
+            'Login prepared. Open Alice Blue sign-in to continue.')}>Generate Alice Blue login</button>
+        {loginUrl && <a href={loginUrl} rel="noreferrer">Open Alice Blue sign-in</a>}
+        <small>Alice Blue may reuse an existing browser sign-in. Account and live feed status are checked separately.</small>
       </div> : <div className="connection-form">
         <button disabled={working || state?.localDemo || !(fyersSettings ? state?.marketConfigured : state?.credentialsConfigured)}
           onClick={() => action(async () => {
@@ -428,6 +439,8 @@ function App() {
       </div>
       }
       <div className="modal-actions">
+        {aliceMode && <button disabled={working || !state?.connected || state?.localDemo}
+          onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Connecting Alice Blue feed…')}>Reconnect feed</button>}
         {fyersSettings ? <button disabled={working || !state?.marketConfigured || state?.localDemo}
           onClick={() => action(() => api('/market/reconnect', 'POST', {}), 'Connecting FYERS quotes…')}>Reconnect quotes</button>
           : <button disabled={working || !state?.connected} onClick={() =>

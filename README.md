@@ -9,11 +9,13 @@ The service binds to loopback port **5003** and uses the existing portal login.
 - Fair price shows the FNO Analyzer's quote-based entry, stop and target estimates for the selected option. It uses FYERS spot, option premium, and option-chain delta, gamma and theta, and leaves estimates blank when inputs are stale or missing.
 
 Alice Blue provides both live spot/option quotes through its WebSocket and order
-execution when `EXECUTION_BROKER=aliceblue`. Sign in once in the Recorder using
-its existing Alice Blue app and callback, then open **Connection → Use recorder
-connection** in Scalper. Session tokens stay in memory and pass only over an
-authenticated loopback connection. Disconnecting Recorder invalidates Scalper
-execution; disconnecting Scalper leaves Recorder running.
+execution when `EXECUTION_BROKER=aliceblue`. Scalper owns a dedicated Alice Blue
+app and in-memory session, independent of Trade Recorder. Open **Connection →
+Generate Alice Blue login → Open Alice Blue sign-in** and complete the broker
+login. Alice Blue returns to `/scalper/api/aliceblue/callback`. Account access is
+verified before showing Connected; WebSocket readiness is shown separately.
+An existing broker browser session may allow sign-in without a new OTP.
+
 
 The ticket supports **NRML / INTRADAY**, **SL limit / SL market** entries and native
 **bracket orders** with stop and target distances in premium points. NRML maps to

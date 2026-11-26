@@ -30,9 +30,12 @@ export function parseAliceMaster(csv, exchange) {
 export class AliceBlue {
   constructor(instruments, env = process.env) {
     this.instruments = instruments;
-    this.sessionKey = env.ALICEBLUE_SESSION_KEY;
+    this.appCode = env.ALICEBLUE_APP_CODE || env.ALICEBLUE_APP_KEY;
+    this.secret = env.ALICEBLUE_API_SECRET;
+    this.redirect = new URL(env.ALICEBLUE_REDIRECT_URL || `${env.SCALPER_ORIGIN || 'http://127.0.0.1:5003'}/scalper/api/aliceblue/callback`);
     this.expectedUser = env.ALICEBLUE_USER_ID;
-    this.configured = !!this.sessionKey;
+    this.configured = !!(this.appCode && this.secret);
+    this.expiresAt = 0;
     this.connected = false;
     this.token = '';
     this.clientId = '';
@@ -44,41 +47,55 @@ export class AliceBlue {
     this.connected = false;
     this.token = '';
     this.clientId = '';
+    this.expiresAt = 0;
     for (const listener of this.listeners) listener();
   }
-  async sharedSession() {
-    if (!this.configured) throw new Error('Configure the private recorder session connection');
-    let session;
-    try {
-      const response = await fetch('http://127.0.0.1:5004/internal/scalper-session', {
-        headers: { 'X-Scalper-Session-Key': this.sessionKey }, redirect: 'error', signal: AbortSignal.timeout(3000)
-      });
-      if (!response.ok) throw new Error();
-      session = await response.json();
-    } catch { throw new Error('Recorder session unavailable. Connect Alice Blue in the recorder.'); }
-    if (!session.connected || !session.token || !session.clientId ||
-        (this.expectedUser && session.clientId !== this.expectedUser)) {
-      throw new Error('Connect the configured Alice Blue account in the recorder');
-    }
-    return session;
+  loginUrl() {
+    if (!this.configured) throw new Error('Configure the dedicated Scalper Alice Blue app credentials');
+    return 'https://ant.aliceblueonline.com/?' + new URLSearchParams({ appcode: this.appCode });
   }
-  async connect() {
+  async connect({ authCode, userId } = {}) {
     this.disconnect();
-    const session = await this.sharedSession();
-    this.token = session.token;
-    this.clientId = session.clientId;
-    this.connected = true;
+    if (!this.configured || typeof authCode !== 'string' || !authCode || authCode.length > 10000 ||
+        typeof userId !== 'string' || !userId || userId.length > 100 ||
+        (this.expectedUser && userId !== this.expectedUser)) {
+      throw new Error('Start a fresh Scalper Alice Blue login for the configured account');
+    }
+    const generation = this.generation;
+    try {
+      const checkSum = createHash('sha256').update(userId + authCode + this.secret).digest('hex');
+      let response, session;
+      try {
+        response = await fetch(base + 'vendor/getUserDetails', {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(12000),
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checkSum })
+        });
+        session = await response.json();
+      } catch { throw new Error('Alice Blue sign-in response unavailable. Start a fresh Scalper login.'); }
+      if (!response.ok || session?.stat !== 'Ok' || !session.userSession ||
+          String(session.clientId) !== userId || generation !== this.generation) {
+        throw new Error('Alice Blue rejected the Scalper sign-in. Start a fresh login.');
+      }
+      let exp;
+      try { exp = JSON.parse(Buffer.from(session.userSession.split('.')[1], 'base64url').toString()).exp; } catch {}
+      this.expiresAt = Number.isFinite(exp) ? exp * 1000 : Date.now() + 8 * 3600000;
+      if (this.expiresAt <= Date.now() + 30000) throw new Error('Alice Blue returned an expired session');
+      this.token = session.userSession;
+      this.clientId = String(session.clientId);
+      const positions = await this.fetch('positions');
+      if (!Array.isArray(positions) || generation !== this.generation) throw new Error('Alice Blue account verification failed');
+      this.connected = true;
+    } catch (error) { this.disconnect(); throw error; }
   }
   async verifySession() {
-    const session = await this.sharedSession();
-    if (!this.connected || this.token !== session.token || this.clientId !== session.clientId) {
+    if (!this.connected || !this.token || this.expiresAt <= Date.now() + 30000) {
       this.disconnect();
-      throw new Error('Shared Alice Blue session changed. Reconnect Scalper.');
+      throw new Error('Scalper Alice Blue session expired or disconnected. Sign in again.');
     }
   }
   async fetch(path, method = 'GET', body) {
     const token = this.token;
-    if (!this.connected) throw new Error('Connect Alice Blue first');
+    if (!this.token) throw new Error('Connect Alice Blue first');
     let response, json;
     try {
       response = await fetch(base + path, { method, redirect: 'error', signal: AbortSignal.timeout(12000),
@@ -90,7 +107,7 @@ export class AliceBlue {
     if (!response.ok || json?.status !== 'Ok') {
       const auth = [401, 403].includes(response.status);
       if (auth && token === this.token) this.disconnect();
-      throw Object.assign(new Error(auth ? 'Alice Blue session expired. Reconnect in the recorder.'
+      throw Object.assign(new Error(auth ? 'Alice Blue session expired. Sign in again in Scalper.'
         : `Alice Blue request rejected (${response.status}). Review the broker book.`), { auth,
         rejected: response.ok && json?.status === 'Not_Ok' || [400, 422].includes(response.status) });
     }
@@ -171,7 +188,7 @@ export class AliceMarketData {
     this.ready = false;
     this.version = 0;
     this.error = '';
-    this.status = 'Connect Alice Blue through the recorder';
+    this.status = 'Sign in to Alice Blue in Scalper';
     broker.listeners.add(() => this.stop());
   }
   start() {
@@ -255,7 +272,7 @@ export class AliceMarketData {
       if (socket !== this.socket) return;
       this.stop();
       if (this.broker.connected) this.reconnect = setTimeout(() => {
-        void this.connectSocket().catch(() => { this.error = 'Reconnect Alice Blue through the recorder'; });
+        void this.connectSocket().catch(() => { this.error = 'Sign in again to Alice Blue in Scalper'; });
       }, 3000).unref();
     };
     socket.addEventListener('error', () => {

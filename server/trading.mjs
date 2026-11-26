@@ -23,7 +23,13 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, alic
   const liveAllowed = !localDemo && (env.ALLOW_LIVE_TRADING ?? 'true') === 'true';
   const limits = { maxQuantity: Number(env.MAX_ORDER_QUANTITY || 5000), maxNotional: Number(env.MAX_ORDER_NOTIONAL || 500000) };
   const logins = new Map();
+  const aliceLogins = new Map();
   const owner = req => createHash('sha256').update(req.headers.cookie || '').digest('hex');
+  const cookie = (req, name) => String(req.headers.cookie || '').split(';').map(s => s.trim())
+    .find(s => s.startsWith(name + '='))?.slice(name.length + 1) || '';
+  const aliceOwner = req => createHash('sha256').update(cookie(req, 'trading_session')).digest('hex');
+  const aliceCookie = { httpOnly: true, sameSite: 'lax', secure: env.SCALPER_ORIGIN?.startsWith('https:') || false,
+    path: '/scalper/api/aliceblue/callback', maxAge: 600000 };
 
   function nameOf(req, fallback) {
     const name = req.get('X-Scalper-Broker') || fallback || defaultBroker;
@@ -110,8 +116,47 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, alic
     const name = nameOf(req);
     res.json({ ...status(name), ...brokers[name].book, quotes: Object.fromEntries(market.enabled && market.snapshot ? market.snapshot() : quotes()) });
   });
+  mutation('post', '/aliceblue/login', (req, res, b, name) => {
+    if (name !== 'aliceblue') throw new Error('Alice Blue is not the configured broker');
+    const url = b.adapter.loginUrl();
+    const nonce = randomBytes(32).toString('hex');
+    b.adapter.disconnect();
+    clearBook(b);
+    b.bookError = '';
+    aliceLogins.set(aliceOwner(req), { nonce: createHash('sha256').update(nonce).digest('hex'), expires: Date.now() + 600000 });
+    res.cookie('scalper_alice_login', nonce, aliceCookie);
+    res.json({ url });
+  });
+  get('/aliceblue/callback', async (req, res) => {
+    const b = brokers.aliceblue;
+    const id = aliceOwner(req), login = aliceLogins.get(id);
+    const nonce = cookie(req, 'scalper_alice_login');
+    if (localDemo || defaultBroker !== 'aliceblue' || !b || !nonce || !login || login.expires < Date.now() ||
+        login.nonce !== createHash('sha256').update(nonce).digest('hex')) {
+      throw new Error('Alice Blue login expired or was not started in this browser. Start a fresh Scalper login.');
+    }
+    if (b.busy) throw new Error('Another broker action is in progress. Retry the callback shortly.');
+    aliceLogins.delete(id);
+    res.clearCookie('scalper_alice_login', { ...aliceCookie, maxAge: undefined });
+    b.busy = true;
+    try {
+      await b.refreshing;
+      clearBook(b);
+      await b.adapter.connect({ authCode: req.query.authCode, userId: req.query.userId });
+      await syncBook(b);
+      if (!b.adapter.connected || b.bookError) throw new Error('Alice Blue account books unavailable. Start a fresh Scalper login.');
+      // Account authentication and feed readiness are separate. A feed failure must not undo a valid login.
+      try { await market.connectSocket(); }
+      catch { market.error = 'Alice Blue account connected; feed unavailable. Reconnect the feed.'; }
+      res.redirect(303, '/scalper/?aliceblue=connected');
+    } catch (error) {
+      b.adapter.disconnect(); clearBook(b);
+      b.bookError = error.message;
+      res.redirect(303, '/scalper/?aliceblue=failed');
+    } finally { b.busy = false; }
+  });
   mutation('post', '/kite-login', (req, res, b, name) => {
-    if (name !== 'zerodha') throw new Error('Sign in through the recorder for the shared Alice Blue connection');
+    if (name !== 'zerodha') throw new Error('Start an Alice Blue login in Scalper');
     const state = randomBytes(24).toString('hex');
     const url = zerodha.loginUrl(state);
     logins.set(owner(req), { state, expires: Date.now() + 600000 });
@@ -120,17 +165,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, alic
   mutation('post', '/connect', async (req, res, b, name) => {
     if (Date.now() - b.lastConnect < 10000) throw new Error('Wait 10 seconds between connection attempts');
     if (name === 'aliceblue') {
-      b.lastConnect = Date.now();
-      clearBook(b);
-      try {
-        await b.adapter.connect();
-        await syncBook(b);
-        if (!b.adapter.connected || b.bookError) throw new Error(b.bookError || 'Alice Blue disconnected');
-        await market.connectSocket();
-      } catch (error) {
-        b.adapter.disconnect(); clearBook(b); throw error;
-      }
-      return res.json(status(name));
+      throw new Error('Start an Alice Blue login in Scalper and complete the broker sign-in');
     }
     const login = logins.get(owner(req));
     let callback;
@@ -159,6 +194,7 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, alic
   });
   mutation('post', '/disconnect', (req, res, b, name) => {
     b.adapter.disconnect();
+    aliceLogins.delete(aliceOwner(req));
     b.bookError = '';
     clearBook(b);
     res.json(status(name));
@@ -249,5 +285,6 @@ export function installTrading({ app, route, env, localDemo, csrf, zerodha, alic
       for (const [id, time] of b.requests) if (now - time > 86400000) b.requests.delete(id);
     }
     for (const [id, login] of logins) if (login.expires < now) logins.delete(id);
+    for (const [id, login] of aliceLogins) if (login.expires < now) aliceLogins.delete(id);
   }, 2500).unref();
 }

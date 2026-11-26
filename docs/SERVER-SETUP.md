@@ -96,34 +96,49 @@ global 30-second request interval. Switching symbols or reconnecting the socket
 does not reset that interval or the rate-limit backoff.
 
 
-## Shared Alice Blue connection
+## Dedicated Alice Blue connection
 
-Keep the Alice Blue app credentials exclusively in Recorder's private `.env`:
-`RECORDER_BROKER=aliceblue`, `ALICEBLUE_APP_KEY`, `ALICEBLUE_API_SECRET`.
-Keep the existing registered redirect `/recorder/api/aliceblue/callback`.
-Do not create a second app or exchange its authorization code twice.
+Scalper uses its own Alice Blue app, credentials, callback and in-memory session.
+Keep Recorder's configuration and callback unchanged. Set the following only in
+Scalper's private `.env` (mode 600), never in VITE variables or Git:
 
-Generate one random 32-byte hex key. Set it as `SCALPER_SESSION_KEY` in Recorder
-and `ALICEBLUE_SESSION_KEY` in Scalper. Both env files must remain mode 600.
-Scalper also needs `EXECUTION_BROKER=aliceblue` and `ALICEBLUE_STATIC_IP` set to the
-backend outbound IP registered with the broker. `ALICEBLUE_USER_ID` optionally
-pins the expected account. No Alice credentials or bearer tokens belong in VITE
-variables, Git, logs or command arguments.
+```dotenv
+EXECUTION_BROKER=aliceblue
+ALICEBLUE_APP_KEY=YOUR_SCALPER_APP_KEY
+ALICEBLUE_API_SECRET=YOUR_SCALPER_API_SECRET
+ALICEBLUE_REDIRECT_URL=http://45.129.86.77/scalper/api/aliceblue/callback
+ALICEBLUE_STATIC_IP=YOUR_BACKEND_OUTBOUND_PUBLIC_IP
+```
 
-The Recorder bridge is `/internal/scalper-session` on fixed loopback port 5004,
-requires the private key and loopback peer/Host, and is outside `/recorder/`.
-Do not proxy this endpoint publicly. It returns no token when disconnected.
-Recorder remains read-only. Broker tokens are checked before mutations and each
-book refresh; a disconnect, changed session or bridge outage blocks execution.
-Only the active broker's books and actions are exposed. Scalper's disconnect
-clears its local session and feed without disconnecting Recorder.
+Use `ALICEBLUE_APP_CODE` if the developer portal provides a distinct appCode.
+`ALICEBLUE_USER_ID` optionally pins the intended account. Remove the obsolete
+`ALICEBLUE_SESSION_KEY`; Scalper no longer calls Recorder's session bridge.
+Register the exact redirect above in the new app's developer settings.
 
-Restart Recorder after installing its `scalper_session.py` bridge, then restart
-Scalper. Log in through Recorder, then click **Use recorder connection** in
-Scalper. A process restart requires reconnecting. The WebSocket uses the current
-V2 CSV master, double SHA-256 session authentication, 50-second heartbeat and
-resubscription. Old/future feed timestamps and depth-only updates cannot refresh
-premium freshness. Only current-day verified contracts can route orders.
+Install `deploy/aliceblue-callback.nginx.conf` as an include inside the existing
+VCCL Nginx server block. This exact callback location verifies the portal session
+and disables access/error logging for authorization query values. Validate with
+`sudo nginx -t` before reloading. Preserve every other route. Restart only
+`scalper-terminal` after configuring the credentials.
+
+Open **Connection → Generate Alice Blue login → Open Alice Blue sign-in**.
+The callback is bound to a short-lived HttpOnly nonce cookie and the originating
+portal session. It consumes the authorization code once, exchanges the checksum
+server-side, validates the account and then connects the WebSocket. Replay,
+expired/mismatched callbacks and wrong accounts fail closed. Starting a new
+login disconnects the previous Scalper session; it never changes Recorder.
+Broker SSO may reuse an existing browser sign-in without a fresh OTP; Scalper
+cannot force OTP through an undocumented parameter.
+
+Account authentication and feed readiness are independent. Connection status
+appears only after account verification; live orders still require authenticated
+WebSocket data, fresh quotes, current books and an allowed backend IP. Use
+**Reconnect feed** after a feed outage. Tokens remain memory-only and clear on
+Scalper restart, disconnect or expiry. No live orders are submitted by checks.
+
+The WebSocket uses the current V2 CSV master, double SHA-256 session
+authentication, 50-second heartbeat and resubscription. Only current-day verified
+contracts can route orders. No simulated production quotes are provided.
 
 API references: [authentication](https://ant.aliceblueonline.com/productdocumentation/Authentication/),
 [WebSocket](https://ant.aliceblueonline.com/productdocumentation/Websocket/),

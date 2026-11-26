@@ -59,17 +59,50 @@ test('Alice mutations send once on timeout and hide upstream details', async t =
   assert.equal(broker.connected, false);
 });
 
-test('recorder disconnect, session change and wrong account block Alice execution', async () => {
-  const broker = new AliceBlue(instruments(), { ALICEBLUE_SESSION_KEY: 'test-key' });
-  let session = { token: 'one', clientId: 'owner' };
-  broker.sharedSession = async () => session;
-  await broker.connect();
+test('dedicated Alice login exchanges the documented checksum and verifies account before connecting', async t => {
+  const broker = new AliceBlue(instruments(), { ALICEBLUE_APP_KEY: 'own-app', ALICEBLUE_API_SECRET: 'own-secret', ALICEBLUE_USER_ID: 'owner' });
+  assert.equal(broker.loginUrl(), 'https://ant.aliceblueonline.com/?appcode=own-app');
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls++;
+    assert.equal(broker.connected, false);
+    assert.ok(!String(url).includes('5004'));
+    if (calls === 1) {
+      const { createHash } = await import('node:crypto');
+      assert.ok(String(url).endsWith('/vendor/getUserDetails'));
+      assert.deepEqual(JSON.parse(options.body), { checkSum: createHash('sha256').update('ownercodeown-secret').digest('hex') });
+      return Response.json({ stat: 'Ok', clientId: 'owner', userSession: 'test-session' });
+    }
+    assert.ok(String(url).endsWith('/positions'));
+    assert.equal(options.headers.Authorization, 'Bearer test-session');
+    return Response.json({ status: 'Ok', result: [] });
+  });
+  await broker.connect({ authCode: 'code', userId: 'owner' });
+  assert.equal(calls, 2);
+  assert.equal(broker.connected, true);
   await broker.verifySession();
-  session = { token: 'two', clientId: 'owner' };
-  await assert.rejects(broker.verifySession(), /session changed/);
+  broker.disconnect();
   assert.equal(broker.connected, false);
-  broker.sharedSession = async () => { throw new Error('Recorder disconnected'); };
-  await assert.rejects(broker.place(contract, input, 'tag'), /Recorder disconnected/);
+  assert.equal(broker.token, '');
+  await assert.rejects(broker.verifySession(), /expired or disconnected/);
+});
+
+test('wrong account, rejected exchange, expired session and failed account verification never connect', async t => {
+  const broker = new AliceBlue(instruments(), { ALICEBLUE_APP_KEY: 'app', ALICEBLUE_API_SECRET: 'secret', ALICEBLUE_USER_ID: 'owner' });
+  let result = { stat: 'Not_ok', emsg: 'private details' };
+  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json(result));
+  await assert.rejects(broker.connect({ authCode: 'code', userId: 'other' }), /configured account/);
+  assert.equal(mock.mock.callCount(), 0);
+  await assert.rejects(broker.connect({ authCode: 'code', userId: 'owner' }), /rejected/);
+  assert.equal(broker.connected, false);
+  result = { stat: 'Ok', clientId: 'other', userSession: 'session' };
+  await assert.rejects(broker.connect({ authCode: 'code', userId: 'owner' }), /rejected/);
+  result = { stat: 'Ok', clientId: 'owner', userSession: 'x.' + Buffer.from(JSON.stringify({exp:1})).toString('base64url') + '.x' };
+  await assert.rejects(broker.connect({ authCode: 'code', userId: 'owner' }), /expired/);
+  result = { stat: 'Ok', clientId: 'owner', userSession: 'test-session' };
+  await assert.rejects(broker.connect({ authCode: 'code', userId: 'owner' }), /rejected/);
+  assert.equal(broker.token, '');
+  assert.equal(broker.connected, false);
 });
 
 test('Alice WebSocket timestamps prevent stale premiums and depth updates from enabling orders', () => {

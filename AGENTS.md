@@ -17,6 +17,7 @@
 - Run npm run check, npm test and npm run build. Meaningful UI changes also use
   node tests/browser.mjs (headless installed Chrome); inspect screenshots.
 
-- Alice Blue mode uses Recorder-owned memory sessions via a keyed loopback bridge,
-  Alice V2 contract masters and Alice WebSocket quotes. Recorder stays read-only.
-  Verify the shared session before mutations and never infer bracket fills.
+- Alice Blue mode owns a dedicated app and in-memory session, with its callback at
+  /scalper/api/aliceblue/callback. Never reuse Recorder credentials or its bridge.
+  Keep callback query values out of Nginx logs. Use Alice V2 contract masters and
+  Alice WebSocket quotes; verify the session before mutations and never infer fills.

@@ -187,8 +187,10 @@ try{
     await page.screenshot({path:fileURLToPath(new URL(`../test-results/alice-${width}.png`,import.meta.url)),fullPage:true});
   }
   await page.getByRole('button', {name:'Connection',exact:true}).click();
-  await page.getByRole('button', {name:'Use recorder connection',exact:true}).waitFor();
-  assert.equal(await page.getByRole('link', {name:'Open Recorder to sign in',exact:true}).getAttribute('href'), '/recorder/');
+  await page.route('**/scalper/api/aliceblue/login', route => route.fulfill({json:{url:'https://ant.aliceblueonline.com/?appcode=mock-app'}}));
+  await page.getByRole('button', {name:'Generate Alice Blue login',exact:true}).click();
+  assert.equal(await page.getByRole('link', {name:'Open Alice Blue sign-in',exact:true}).getAttribute('href'), 'https://ant.aliceblueonline.com/?appcode=mock-app');
+  assert.equal(await page.getByRole('link', {name:'Open Recorder to sign in',exact:true}).count(), 0);
   await page.screenshot({path:fileURLToPath(new URL('../test-results/alice-connection.png',import.meta.url)),fullPage:true});
   const fair=await browser.newPage();
   const frontend=new URL('../../FNO-Analyzer/frontend/',import.meta.url);
